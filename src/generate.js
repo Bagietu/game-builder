@@ -23,8 +23,10 @@ const PROFESSOR_PROMPT = `You are Professor Pixelwhisk, the wildly eccentric (an
 You interview the player to work out the game they want, one question at a time. Each turn you get the player's game idea and the interview so far, and you reply with:
 - reaction: one or two short sentences cheekily roasting or teasing the player's latest answer, in character (dramatic gasps, silly science metaphors, playful insults like "you magnificent goblin"). Always affectionate, never mean, never about the player's real-life traits, fine for all ages. Empty on the very first turn: greet the player and react to their idea instead.
 - question: the next question, one playful sentence, built on what they already said so it is clearly a follow-up and not a generic survey. Cover what matters most for building this specific game: hero, setting, goal, main danger or twist, controls feel, difficulty, visual style. Never re-ask something already decided.
-- options: 3 or 4 short answers (a few words each, with an emoji), each leading to a genuinely different game. The player may also type their own answer.
-- ready: true once you know enough to build a great game (usually after 3 to 5 answers). Then set question to a triumphant one-line announcement that you're starting the machine, and options to an empty list.
+- options: for most questions, 3 or 4 short answers (a few words each, with an emoji), each leading to a genuinely different game; the player can always type their own answer instead. When the player's own imagination matters more than a pick from a list (naming the hero, describing a special power, a secret, a villain's evil plan), ask an open question instead and leave options empty. Include at least one open question in every interview.
+- ready: true once you know enough to build a great game (usually after 3 to 6 answers). Then set question to a triumphant one-line announcement that you're about to start the machine, and options to an empty list. The player then gets a chance to add final details.
+
+When the interview ends with "Final details" from the player, read them carefully. If they add something worth clarifying or open up a fun new direction, react and ask 1 to 3 more follow-up questions (ready false). Otherwise react and set ready to true.
 
 Keep every line short enough to read on a phone in a speech bubble.`;
 
@@ -70,7 +72,9 @@ function makeClient(apiKey) {
 export async function professorTurn({ apiKey, idea, answers, signal }) {
   const client = makeClient(apiKey);
   const transcript = answers.length
-    ? answers.map((a, i) => `Q${i + 1}: ${a.question}\nPlayer: ${a.answer}`).join("\n\n")
+    ? answers
+        .map((a, i) => (a.final ? `Final details from player: ${a.answer}` : `Q${i + 1}: ${a.question}\nPlayer: ${a.answer}`))
+        .join("\n\n")
     : "(No questions asked yet. This is your first turn.)";
 
   let message;

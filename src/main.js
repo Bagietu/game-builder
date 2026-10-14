@@ -16,7 +16,8 @@ const IDEAS = [
 
 let currentGame = null;
 let abort = null;
-const MAX_QUESTIONS = 5;
+const MAX_QUESTIONS = 10; // safety cap; the professor usually stops sooner
+const FINAL_QUESTION = "Any last details before I pull the lever?";
 const prof = new Professor($("professor"), $("bubbleText"));
 
 // ---------- Builder ----------
@@ -73,13 +74,15 @@ async function nextTurn() {
     setBusy(false, $("buildBtn"), $("progress"));
     if (interview !== session) return;
 
-    const done = turn.ready || session.answers.length >= MAX_QUESTIONS || turn.options.length === 0;
+    const asked = session.answers.filter((a) => !a.final).length;
+    const justAddedDetails = session.answers.at(-1)?.final;
     if (turn.reaction) await sayReaction(turn.reaction);
     if (interview !== session) return;
-    if (done) {
-      await prof.say(turn.question, { after: "working" });
+    if (asked >= MAX_QUESTIONS || (turn.ready && justAddedDetails)) {
+      await prof.say(turn.ready ? turn.question : "Enough science! To the machine!", { after: "working" });
       return build(session.idea, session.answers);
     }
+    if (turn.ready) return showFinalDetails(session, turn);
     showQuestion(session, turn);
   } catch (err) {
     abort = null;
@@ -109,8 +112,15 @@ function showQuestion(session, turn) {
     }
   });
 
-  $("quizCount").textContent = `Question ${session.answers.length + 1} of up to ${MAX_QUESTIONS}`;
+  const number = session.answers.filter((a) => !a.final).length + 1;
+  const open = turn.options.length === 0;
+  $("quizCount").textContent = open ? `Question ${number} · your own words` : `Question ${number}`;
+  $("answerInput").placeholder = open ? "Type your answer…" : "…or write your own answer";
+  $("answerForm").hidden = false;
+  $("finalDetails").hidden = true;
+  $("skipQuiz").hidden = false;
   const box = $("quizOptions");
+  box.hidden = open;
   box.replaceChildren();
   const answer = (text) => {
     if (interview !== session) return;
@@ -141,6 +151,40 @@ function showQuestion(session, turn) {
     prof.say("Impatient! I love it. To the machine!", { after: "working" });
     build(session.idea, session.answers);
   };
+  revealQuiz();
+  if (open) $("answerInput").focus({ preventScroll: true });
+}
+
+// The professor is ready: let the player add anything else before building.
+function showFinalDetails(session, turn) {
+  prof.say(`${turn.question} ${FINAL_QUESTION}`).then(() => {
+    if (turn.reaction) {
+      const r = document.createElement("span");
+      r.className = "reaction";
+      r.textContent = turn.reaction;
+      $("bubbleText").prepend(r);
+    }
+  });
+  $("quizCount").textContent = "Final touches (optional)";
+  $("quizOptions").hidden = true;
+  $("answerForm").hidden = true;
+  $("skipQuiz").hidden = true;
+  $("finalDetails").hidden = false;
+  $("detailsInput").value = "";
+  $("finalBuildBtn").onclick = () => {
+    if (interview !== session) return;
+    const details = $("detailsInput").value.trim();
+    if (!details) {
+      prof.say("No notes? Pure confidence! FIRE UP THE MACHINE!", { after: "working" });
+      return build(session.idea, session.answers);
+    }
+    session.answers.push({ question: FINAL_QUESTION, answer: details, final: true });
+    nextTurn();
+  };
+  revealQuiz();
+}
+
+function revealQuiz() {
   $("quiz").hidden = false;
   // Restart the pop-in animation for each new question.
   $("quiz").style.animation = "none";
@@ -151,7 +195,9 @@ function showQuestion(session, turn) {
 function composePrompt(idea, answers) {
   const base = idea || "Surprise me with a fun game.";
   if (answers.length === 0) return base;
-  const picks = answers.map((a) => `- ${a.question} → ${a.answer}`).join("\n");
+  const picks = answers
+    .map((a) => (a.final ? `- Extra details from the player: ${a.answer}` : `- ${a.question} → ${a.answer}`))
+    .join("\n");
   return `${base}\n\nThe player decided these details in an interview:\n${picks}`;
 }
 
