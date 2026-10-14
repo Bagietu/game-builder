@@ -17,49 +17,50 @@ Requirements:
 
 Reply with only the HTML document, starting with <!DOCTYPE html> and ending with </html>. No explanation before or after it.`;
 
-const QUIZ_PROMPT = `You are the hilarious game-show host inside "Game Builder", an app where players create small phone games by describing them.
+const PROFESSOR_PROMPT = `You are Professor Pixelwhisk, the wildly eccentric (and slightly unhinged) mad scientist of game design inside "Game Builder", a phone app where players invent small games.
 
-Before the game gets built, you ask the player 4 short, funny multiple-choice questions that decide the game's most important features: things like the hero, the setting, the goal, the main danger or twist, the difficulty, or the visual style. Pick the 4 that matter most for this particular game idea, and skip anything the player already decided.
+You interview the player to work out the game they want, one question at a time. Each turn you get the player's game idea and the interview so far, and you reply with:
+- reaction: one or two short sentences cheekily roasting or teasing the player's latest answer, in character (dramatic gasps, silly science metaphors, playful insults like "you magnificent goblin"). Always affectionate, never mean, never about the player's real-life traits, fine for all ages. Empty on the very first turn: greet the player and react to their idea instead.
+- question: the next question, one playful sentence, built on what they already said so it is clearly a follow-up and not a generic survey. Cover what matters most for building this specific game: hero, setting, goal, main danger or twist, controls feel, difficulty, visual style. Never re-ask something already decided.
+- options: 3 or 4 short answers (a few words each, with an emoji), each leading to a genuinely different game. The player may also type their own answer.
+- ready: true once you know enough to build a great game (usually after 3 to 5 answers). Then set question to a triumphant one-line announcement that you're starting the machine, and options to an empty list.
 
-Each question is one playful sentence (puns, silly stakes and dramatic flair welcome, but keep it clear what it's really asking). Each has 3 or 4 answers of a few words each, with a fitting emoji, and every answer must lead to a genuinely different game. Keep it friendly for all ages.`;
+Keep every line short enough to read on a phone in a speech bubble.`;
 
-const QUIZ_SCHEMA = {
+const PROFESSOR_SCHEMA = {
   type: "object",
   properties: {
-    questions: {
+    reaction: { type: "string" },
+    question: { type: "string" },
+    options: {
       type: "array",
       items: {
         type: "object",
         properties: {
-          question: { type: "string" },
-          options: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                emoji: { type: "string" },
-                label: { type: "string" },
-              },
-              required: ["emoji", "label"],
-              additionalProperties: false,
-            },
-          },
+          emoji: { type: "string" },
+          label: { type: "string" },
         },
-        required: ["question", "options"],
+        required: ["emoji", "label"],
         additionalProperties: false,
       },
     },
+    ready: { type: "boolean" },
   },
-  required: ["questions"],
+  required: ["reaction", "question", "options", "ready"],
   additionalProperties: false,
 };
 
 export class GenerationError extends Error {}
 
-/** Ask Claude for a few funny questions that pin down the game's features. */
-export async function askQuestions({ apiKey, prompt, signal }) {
+/**
+ * One turn of the professor's interview. `answers` is [{ question, answer }] so far.
+ * Returns { reaction, question, options, ready }.
+ */
+export async function professorTurn({ apiKey, idea, answers, signal }) {
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-  const idea = prompt || "No idea yet. Surprise me!";
+  const transcript = answers.length
+    ? answers.map((a, i) => `Q${i + 1}: ${a.question}\nPlayer: ${a.answer}`).join("\n\n")
+    : "(No questions asked yet. This is your first turn.)";
 
   let message;
   try {
@@ -69,9 +70,14 @@ export async function askQuestions({ apiKey, prompt, signal }) {
         max_tokens: 16000,
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
-        output_config: { effort: "low", format: { type: "json_schema", schema: QUIZ_SCHEMA } },
-        system: QUIZ_PROMPT,
-        messages: [{ role: "user", content: `The player's game idea: ${idea}` }],
+        output_config: { effort: "low", format: { type: "json_schema", schema: PROFESSOR_SCHEMA } },
+        system: PROFESSOR_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: `Player's game idea: ${idea || "None yet. They want you to surprise them."}\n\nInterview so far:\n${transcript}`,
+          },
+        ],
       },
       { signal },
     );
@@ -80,14 +86,14 @@ export async function askQuestions({ apiKey, prompt, signal }) {
   }
 
   if (message.stop_reason === "refusal") {
-    throw new GenerationError("Claude declined this idea. Try describing the game differently.");
+    throw new GenerationError("The professor refuses to work on that one. Try a different idea.");
   }
   const text = message.content.find((block) => block.type === "text")?.text;
   try {
-    const { questions } = JSON.parse(text);
-    return questions.filter((q) => q.options?.length >= 2).slice(0, 5);
+    const turn = JSON.parse(text);
+    return { ...turn, options: (turn.options ?? []).slice(0, 4) };
   } catch {
-    throw new GenerationError("Claude's questions came back garbled. Try again.");
+    throw new GenerationError("The professor's notes came back garbled. Try again.");
   }
 }
 

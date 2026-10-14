@@ -19,18 +19,25 @@
   </header>
 
   <main>
+    <section class="stage">
+      <div id="professor" class="professor"></div>
+      <div class="bubble" aria-live="polite"><span id="bubbleText"></span></div>
+    </section>
+
     <section class="card" id="builder">
       <div id="form" class="stack">
-        <label for="prompt" class="label">Describe a game (or leave it empty for a surprise)</label>
-        <textarea id="prompt" rows="4" placeholder="A platformer where a cat jumps between rooftops collecting fish"></textarea>
+        <textarea id="prompt" rows="3" aria-label="Your game idea" placeholder="A platformer where a cat jumps between rooftops collecting fish"></textarea>
         <div class="chips" id="ideas"></div>
         <button id="buildBtn" class="primary">Let's go!</button>
       </div>
       <div id="quiz" class="quiz" hidden>
         <div id="quizCount" class="muted small"></div>
-        <p id="quizQuestion" class="quiz-q"></p>
         <div id="quizOptions" class="quiz-options"></div>
-        <button id="skipQuiz" class="link">Skip the questions and build it</button>
+        <form id="answerForm" class="answer-row">
+          <input id="answerInput" type="text" autocomplete="off" placeholder="…or type your own answer" />
+          <button class="primary" aria-label="Send answer">➤</button>
+        </form>
+        <button id="skipQuiz" class="link">Enough questions, build it now!</button>
       </div>
       <div id="progress" class="progress" hidden>
         <div class="spinner"></div>

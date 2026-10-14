@@ -1,4 +1,5 @@
-import { askQuestions, generateGame } from "./generate.js";
+import { professorTurn, generateGame } from "./generate.js";
+import { Professor, GREETINGS, THINKING_LINES, BUILD_LINES, pick } from "./professor.js";
 import { getApiKey, setApiKey, listGames, saveGame, deleteGame } from "./storage.js";
 
 const $ = (id) => document.getElementById(id);
@@ -14,6 +15,8 @@ const IDEAS = [
 
 let currentGame = null;
 let abort = null;
+const MAX_QUESTIONS = 5;
+const prof = new Professor($("professor"), $("bubbleText"));
 
 // ---------- Builder ----------
 
@@ -37,85 +40,133 @@ function requireKey() {
   return key;
 }
 
-// Step 1: Claude asks a few funny questions about the game's features.
-async function start() {
-  const idea = $("prompt").value.trim();
+// Step 1: the professor interviews the player, one adaptive question at a time.
+let interview = null;
+
+function start() {
   const apiKey = requireKey();
   if (!apiKey) return;
+  $("error").hidden = true;
+  interview = { idea: $("prompt").value.trim(), answers: [] };
+  $("form").hidden = true;
+  nextTurn();
+}
 
-  setBusy(true, $("buildBtn"), $("progress"), $("error"));
-  $("progressText").textContent = "Thinking up some questions…";
+async function nextTurn() {
+  const session = interview;
+  $("quiz").hidden = true;
+  $("error").hidden = true;
+  prof.set(pick(THINKING_LINES), "thinking");
+  setBusy(true, $("buildBtn"), $("progress"));
+  $("progressText").textContent = "The professor is thinking…";
   abort = new AbortController();
   try {
-    const questions = await askQuestions({ apiKey, prompt: idea, signal: abort.signal });
+    const turn = await professorTurn({
+      apiKey: getApiKey(),
+      idea: session.idea,
+      answers: session.answers,
+      signal: abort.signal,
+    });
     abort = null;
     setBusy(false, $("buildBtn"), $("progress"));
-    if (questions.length === 0) return build(idea, []);
-    runQuiz(idea, questions);
+    if (interview !== session) return;
+
+    const done = turn.ready || session.answers.length >= MAX_QUESTIONS || turn.options.length === 0;
+    if (turn.reaction) await sayReaction(turn.reaction);
+    if (interview !== session) return;
+    if (done) {
+      await prof.say(turn.question, { after: "working" });
+      return build(session.idea, session.answers);
+    }
+    showQuestion(session, turn);
   } catch (err) {
     abort = null;
     setBusy(false, $("buildBtn"), $("progress"));
+    if (interview !== session) return;
+    prof.set("Blast! My machine sputtered. Try again?", "idle");
     showError($("error"), err);
+    $("quiz").hidden = true;
+    $("form").hidden = false;
+    interview = null;
   }
 }
 
-function runQuiz(idea, questions) {
-  const answers = [];
-  $("form").hidden = true;
-  $("quiz").hidden = false;
-  $("skipQuiz").onclick = () => build(idea, answers);
-
-  const show = (i) => {
-    if (i === questions.length) return build(idea, answers);
-    const q = questions[i];
-    $("quizCount").textContent = `Question ${i + 1} of ${questions.length}`;
-    $("quizQuestion").textContent = q.question;
-    const box = $("quizOptions");
-    box.replaceChildren();
-    for (const option of q.options) {
-      const btn = document.createElement("button");
-      btn.className = "quiz-option";
-      const emoji = document.createElement("span");
-      emoji.className = "emoji";
-      emoji.textContent = option.emoji;
-      const label = document.createElement("span");
-      label.textContent = option.label;
-      btn.append(emoji, label);
-      btn.addEventListener("click", () => {
-        answers.push({ question: q.question, answer: option.label });
-        show(i + 1);
-      });
-      box.append(btn);
-    }
-    // Restart the pop-in animation for each new question.
-    $("quiz").style.animation = "none";
-    void $("quiz").offsetWidth;
-    $("quiz").style.animation = "";
-  };
-  show(0);
+async function sayReaction(reaction) {
+  await prof.say(reaction, { mood: "laughing", after: "laughing" });
+  await new Promise((r) => setTimeout(r, 900));
 }
 
-function hideQuiz() {
-  $("quiz").hidden = true;
-  $("form").hidden = false;
+function showQuestion(session, turn) {
+  // Keep the roast visible above the question.
+  prof.say(turn.question).then(() => {
+    if (turn.reaction) {
+      const r = document.createElement("span");
+      r.className = "reaction";
+      r.textContent = turn.reaction;
+      $("bubbleText").prepend(r);
+    }
+  });
+
+  $("quizCount").textContent = `Question ${session.answers.length + 1} of up to ${MAX_QUESTIONS}`;
+  const box = $("quizOptions");
+  box.replaceChildren();
+  const answer = (text) => {
+    if (interview !== session) return;
+    session.answers.push({ question: turn.question, answer: text });
+    nextTurn();
+  };
+  for (const option of turn.options) {
+    const btn = document.createElement("button");
+    btn.className = "quiz-option";
+    const emoji = document.createElement("span");
+    emoji.className = "emoji";
+    emoji.textContent = option.emoji;
+    const label = document.createElement("span");
+    label.textContent = option.label;
+    btn.append(emoji, label);
+    btn.addEventListener("click", () => answer(option.label));
+    box.append(btn);
+  }
+  $("answerForm").onsubmit = (e) => {
+    e.preventDefault();
+    const text = $("answerInput").value.trim();
+    if (!text) return $("answerInput").focus();
+    $("answerInput").value = "";
+    answer(text);
+  };
+  $("skipQuiz").onclick = () => {
+    if (interview !== session) return;
+    prof.say("Impatient! I love it. To the machine!", { after: "working" });
+    build(session.idea, session.answers);
+  };
+  $("quiz").hidden = false;
+  // Restart the pop-in animation for each new question.
+  $("quiz").style.animation = "none";
+  void $("quiz").offsetWidth;
+  $("quiz").style.animation = "";
 }
 
 function composePrompt(idea, answers) {
   const base = idea || "Surprise me with a fun game.";
   if (answers.length === 0) return base;
   const picks = answers.map((a) => `- ${a.question} → ${a.answer}`).join("\n");
-  return `${base}\n\nThe player picked these features:\n${picks}`;
+  return `${base}\n\nThe player decided these details in an interview:\n${picks}`;
 }
 
 // Step 2: build the game from the idea plus the player's answers.
 async function build(idea, answers) {
-  hideQuiz();
+  interview = null;
+  $("quiz").hidden = true;
+  $("form").hidden = true;
   const apiKey = requireKey();
-  if (!apiKey) return;
+  if (!apiKey) return resetBuilder();
   const prompt = composePrompt(idea, answers);
   const summary = [idea, ...answers.map((a) => a.answer)].filter(Boolean).join(" · ") || "Surprise game";
 
   setBusy(true, $("buildBtn"), $("progress"), $("error"));
+  $("progressText").textContent = "Building your game…";
+  const quips = setInterval(() => prof.set(pick(BUILD_LINES), "working"), 3500);
+  setTimeout(() => prof.set(pick(BUILD_LINES), "working"), 1500);
   abort = new AbortController();
   try {
     const { html, title } = await generateGame({
@@ -128,13 +179,24 @@ async function build(idea, answers) {
     saveGame(game);
     $("prompt").value = "";
     renderGallery();
+    clearInterval(quips);
+    prof.say(`IT'S ALIVE! Behold: ${game.title}! Want another one?`, { mood: "laughing" });
     openPlayer(game);
   } catch (err) {
+    clearInterval(quips);
+    prof.set("Kaboom. That wasn't supposed to happen. Shall we try again?", "idle");
     showError($("error"), err);
   } finally {
+    clearInterval(quips);
     abort = null;
     setBusy(false, $("buildBtn"), $("progress"));
+    resetBuilder();
   }
+}
+
+function resetBuilder() {
+  $("quiz").hidden = true;
+  $("form").hidden = false;
 }
 
 function progressLabel(chars) {
@@ -270,6 +332,12 @@ $("settings").addEventListener("close", () => {
 
 $("buildBtn").addEventListener("click", start);
 $("cancelBtn").addEventListener("click", () => abort?.abort());
+$("prompt").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    start();
+  }
+});
 $("settingsBtn").addEventListener("click", openSettings);
 $("closePlayer").addEventListener("click", () => {
   closePlayer();
@@ -285,6 +353,7 @@ window.addEventListener("popstate", closePlayer);
 
 renderIdeas();
 renderGallery();
+prof.say(pick(GREETINGS));
 if (!getApiKey()) openSettings();
 
 if ("serviceWorker" in navigator) {
