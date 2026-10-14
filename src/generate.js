@@ -17,7 +17,79 @@ Requirements:
 
 Reply with only the HTML document, starting with <!DOCTYPE html> and ending with </html>. No explanation before or after it.`;
 
+const QUIZ_PROMPT = `You are the hilarious game-show host inside "Game Builder", an app where players create small phone games by describing them.
+
+Before the game gets built, you ask the player 4 short, funny multiple-choice questions that decide the game's most important features: things like the hero, the setting, the goal, the main danger or twist, the difficulty, or the visual style. Pick the 4 that matter most for this particular game idea, and skip anything the player already decided.
+
+Each question is one playful sentence (puns, silly stakes and dramatic flair welcome, but keep it clear what it's really asking). Each has 3 or 4 answers of a few words each, with a fitting emoji, and every answer must lead to a genuinely different game. Keep it friendly for all ages.`;
+
+const QUIZ_SCHEMA = {
+  type: "object",
+  properties: {
+    questions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          question: { type: "string" },
+          options: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                emoji: { type: "string" },
+                label: { type: "string" },
+              },
+              required: ["emoji", "label"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["question", "options"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["questions"],
+  additionalProperties: false,
+};
+
 export class GenerationError extends Error {}
+
+/** Ask Claude for a few funny questions that pin down the game's features. */
+export async function askQuestions({ apiKey, prompt, signal }) {
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  const idea = prompt || "No idea yet. Surprise me!";
+
+  let message;
+  try {
+    message = await client.beta.messages.create(
+      {
+        model: MODEL,
+        max_tokens: 16000,
+        betas: ["server-side-fallback-2026-07-01"],
+        fallbacks: "default",
+        output_config: { effort: "low", format: { type: "json_schema", schema: QUIZ_SCHEMA } },
+        system: QUIZ_PROMPT,
+        messages: [{ role: "user", content: `The player's game idea: ${idea}` }],
+      },
+      { signal },
+    );
+  } catch (err) {
+    throw new GenerationError(describeApiError(err));
+  }
+
+  if (message.stop_reason === "refusal") {
+    throw new GenerationError("Claude declined this idea. Try describing the game differently.");
+  }
+  const text = message.content.find((block) => block.type === "text")?.text;
+  try {
+    const { questions } = JSON.parse(text);
+    return questions.filter((q) => q.options?.length >= 2).slice(0, 5);
+  } catch {
+    throw new GenerationError("Claude's questions came back garbled. Try again.");
+  }
+}
 
 /**
  * Ask Claude for a game. Pass `currentHtml` to change an existing game.

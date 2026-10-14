@@ -20,10 +20,18 @@
 
   <main>
     <section class="card" id="builder">
-      <label for="prompt" class="label">Describe a game</label>
-      <textarea id="prompt" rows="4" placeholder="A platformer where a cat jumps between rooftops collecting fish"></textarea>
-      <div class="chips" id="ideas"></div>
-      <button id="buildBtn" class="primary">Build it</button>
+      <div id="form" class="stack">
+        <label for="prompt" class="label">Describe a game (or leave it empty for a surprise)</label>
+        <textarea id="prompt" rows="4" placeholder="A platformer where a cat jumps between rooftops collecting fish"></textarea>
+        <div class="chips" id="ideas"></div>
+        <button id="buildBtn" class="primary">Let's go!</button>
+      </div>
+      <div id="quiz" class="quiz" hidden>
+        <div id="quizCount" class="muted small"></div>
+        <p id="quizQuestion" class="quiz-q"></p>
+        <div id="quizOptions" class="quiz-options"></div>
+        <button id="skipQuiz" class="link">Skip the questions and build it</button>
+      </div>
       <div id="progress" class="progress" hidden>
         <div class="spinner"></div>
         <span id="progressText">Building your game…</span>

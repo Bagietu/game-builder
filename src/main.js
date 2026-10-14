@@ -1,4 +1,4 @@
-import { generateGame } from "./generate.js";
+import { askQuestions, generateGame } from "./generate.js";
 import { getApiKey, setApiKey, listGames, saveGame, deleteGame } from "./storage.js";
 
 const $ = (id) => document.getElementById(id);
@@ -37,11 +37,83 @@ function requireKey() {
   return key;
 }
 
-async function build() {
-  const prompt = $("prompt").value.trim();
-  if (!prompt) return $("prompt").focus();
+// Step 1: Claude asks a few funny questions about the game's features.
+async function start() {
+  const idea = $("prompt").value.trim();
   const apiKey = requireKey();
   if (!apiKey) return;
+
+  setBusy(true, $("buildBtn"), $("progress"), $("error"));
+  $("progressText").textContent = "Thinking up some questions…";
+  abort = new AbortController();
+  try {
+    const questions = await askQuestions({ apiKey, prompt: idea, signal: abort.signal });
+    abort = null;
+    setBusy(false, $("buildBtn"), $("progress"));
+    if (questions.length === 0) return build(idea, []);
+    runQuiz(idea, questions);
+  } catch (err) {
+    abort = null;
+    setBusy(false, $("buildBtn"), $("progress"));
+    showError($("error"), err);
+  }
+}
+
+function runQuiz(idea, questions) {
+  const answers = [];
+  $("form").hidden = true;
+  $("quiz").hidden = false;
+  $("skipQuiz").onclick = () => build(idea, answers);
+
+  const show = (i) => {
+    if (i === questions.length) return build(idea, answers);
+    const q = questions[i];
+    $("quizCount").textContent = `Question ${i + 1} of ${questions.length}`;
+    $("quizQuestion").textContent = q.question;
+    const box = $("quizOptions");
+    box.replaceChildren();
+    for (const option of q.options) {
+      const btn = document.createElement("button");
+      btn.className = "quiz-option";
+      const emoji = document.createElement("span");
+      emoji.className = "emoji";
+      emoji.textContent = option.emoji;
+      const label = document.createElement("span");
+      label.textContent = option.label;
+      btn.append(emoji, label);
+      btn.addEventListener("click", () => {
+        answers.push({ question: q.question, answer: option.label });
+        show(i + 1);
+      });
+      box.append(btn);
+    }
+    // Restart the pop-in animation for each new question.
+    $("quiz").style.animation = "none";
+    void $("quiz").offsetWidth;
+    $("quiz").style.animation = "";
+  };
+  show(0);
+}
+
+function hideQuiz() {
+  $("quiz").hidden = true;
+  $("form").hidden = false;
+}
+
+function composePrompt(idea, answers) {
+  const base = idea || "Surprise me with a fun game.";
+  if (answers.length === 0) return base;
+  const picks = answers.map((a) => `- ${a.question} → ${a.answer}`).join("\n");
+  return `${base}\n\nThe player picked these features:\n${picks}`;
+}
+
+// Step 2: build the game from the idea plus the player's answers.
+async function build(idea, answers) {
+  hideQuiz();
+  const apiKey = requireKey();
+  if (!apiKey) return;
+  const prompt = composePrompt(idea, answers);
+  const summary = [idea, ...answers.map((a) => a.answer)].filter(Boolean).join(" · ") || "Surprise game";
 
   setBusy(true, $("buildBtn"), $("progress"), $("error"));
   abort = new AbortController();
@@ -52,7 +124,7 @@ async function build() {
       signal: abort.signal,
       onProgress: (n) => ($("progressText").textContent = progressLabel(n)),
     });
-    const game = { id: crypto.randomUUID(), title: title || prompt, prompt, html, history: [prompt] };
+    const game = { id: crypto.randomUUID(), title: title || summary, prompt, html, history: [summary] };
     saveGame(game);
     $("prompt").value = "";
     renderGallery();
@@ -196,7 +268,7 @@ $("settings").addEventListener("close", () => {
 
 // ---------- Wiring ----------
 
-$("buildBtn").addEventListener("click", build);
+$("buildBtn").addEventListener("click", start);
 $("cancelBtn").addEventListener("click", () => abort?.abort());
 $("settingsBtn").addEventListener("click", openSettings);
 $("closePlayer").addEventListener("click", () => {
