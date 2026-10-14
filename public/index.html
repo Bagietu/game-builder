@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#14121f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Game Builder</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>🎮 Game Builder</h1>
+    <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙️</button>
+  </header>
+
+  <main>
+    <section class="card" id="builder">
+      <label for="prompt" class="label">Describe a game</label>
+      <textarea id="prompt" rows="4" placeholder="A platformer where a cat jumps between rooftops collecting fish"></textarea>
+      <div class="chips" id="ideas"></div>
+      <button id="buildBtn" class="primary">Build it</button>
+      <div id="progress" class="progress" hidden>
+        <div class="spinner"></div>
+        <span id="progressText">Building your game…</span>
+        <button id="cancelBtn" class="link">Cancel</button>
+      </div>
+      <p id="error" class="error" hidden></p>
+    </section>
+
+    <section>
+      <h2 class="section-title">My games</h2>
+      <p id="emptyGallery" class="muted">Games you build show up here, saved on this device.</p>
+      <ul id="gallery" class="gallery"></ul>
+    </section>
+  </main>
+
+  <!-- Play screen -->
+  <div id="player" class="player" hidden>
+    <div class="player-bar">
+      <button id="closePlayer" class="icon-btn" aria-label="Back">←</button>
+      <span id="playerTitle" class="player-title"></span>
+      <button id="restartBtn" class="icon-btn" aria-label="Restart">↻</button>
+      <button id="tweakToggle" class="icon-btn" aria-label="Change this game">✏️</button>
+    </div>
+    <iframe id="frame" title="Game" sandbox="allow-scripts"></iframe>
+    <div id="tweakPanel" class="tweak" hidden>
+      <textarea id="tweakPrompt" rows="2" placeholder="Make it faster, add a boss, change colors to neon…"></textarea>
+      <div class="tweak-actions">
+        <button id="tweakBtn" class="primary">Update game</button>
+      </div>
+      <div id="tweakProgress" class="progress" hidden>
+        <div class="spinner"></div>
+        <span id="tweakProgressText">Updating…</span>
+      </div>
+      <p id="tweakError" class="error" hidden></p>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <dialog id="settings">
+    <form method="dialog" class="settings-form">
+      <h2>Settings</h2>
+      <label for="apiKey" class="label">Anthropic API key</label>
+      <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…" />
+      <p class="muted small">
+        Stored only on this device and sent only to Anthropic's API.
+        Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
+      </p>
+      <div class="row">
+        <button value="cancel" class="secondary">Cancel</button>
+        <button id="saveSettings" value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
