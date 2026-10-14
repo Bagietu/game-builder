@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { getWorkspaceId } from "./storage.js";
 
 const MODEL = "claude-opus-5-5";
 
@@ -52,12 +53,22 @@ const PROFESSOR_SCHEMA = {
 
 export class GenerationError extends Error {}
 
+// Keys that aren't tied to one workspace must name the workspace on every request.
+function makeClient(apiKey) {
+  const workspaceId = getWorkspaceId();
+  return new Anthropic({
+    apiKey,
+    dangerouslyAllowBrowser: true,
+    defaultHeaders: workspaceId ? { "anthropic-workspace-id": workspaceId } : undefined,
+  });
+}
+
 /**
  * One turn of the professor's interview. `answers` is [{ question, answer }] so far.
  * Returns { reaction, question, options, ready }.
  */
 export async function professorTurn({ apiKey, idea, answers, signal }) {
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  const client = makeClient(apiKey);
   const transcript = answers.length
     ? answers.map((a, i) => `Q${i + 1}: ${a.question}\nPlayer: ${a.answer}`).join("\n\n")
     : "(No questions asked yet. This is your first turn.)";
@@ -102,7 +113,7 @@ export async function professorTurn({ apiKey, idea, answers, signal }) {
  * `onProgress(chars)` is called as the HTML streams in.
  */
 export async function generateGame({ apiKey, prompt, currentHtml, signal, onProgress }) {
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  const client = makeClient(apiKey);
 
   const userContent = currentHtml
     ? `Here is the current game:\n\n${currentHtml}\n\nChange it like this: ${prompt}\n\nReturn the full updated HTML document.`
@@ -173,6 +184,9 @@ function describeApiError(err) {
   if (err instanceof Anthropic.RateLimitError) return "Rate limited by the API. Wait a moment and try again.";
   if (err instanceof Anthropic.APIConnectionError) return "Couldn't reach Anthropic's API. Check your connection.";
   if (err instanceof Anthropic.APIError) {
+    if (err.status === 400 && /anthropic-workspace-id/i.test(err.message)) {
+      return "This API key needs a workspace. Open Settings and add your Workspace ID (it starts with wrkspc_).";
+    }
     if (err.status === 400 && /credit balance/i.test(err.message)) {
       return "Your Anthropic account is out of credits.";
     }
