@@ -1,6 +1,6 @@
 import { professorTurn, generateGame } from "./generate.js";
 import { Professor, GREETINGS, THINKING_LINES, BUILD_LINES, pick } from "./professor.js";
-import { getApiKey, setApiKey, listGames, saveGame, deleteGame } from "./storage.js";
+import { getApiKey, setApiKey, getWorkspaceId, setWorkspaceId, listGames, saveGame, deleteGame } from "./storage.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -321,11 +321,15 @@ function openPlayerInPlace(game) {
 
 function openSettings() {
   $("apiKey").value = getApiKey();
+  $("workspaceId").value = getWorkspaceId();
   $("settings").showModal();
 }
 
 $("settings").addEventListener("close", () => {
-  if ($("settings").returnValue === "save") setApiKey($("apiKey").value.trim());
+  if ($("settings").returnValue === "save") {
+    setApiKey($("apiKey").value.trim());
+    setWorkspaceId($("workspaceId").value.trim());
+  }
 });
 
 // ---------- Wiring ----------

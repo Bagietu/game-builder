@@ -82,6 +82,11 @@
       <h2>Settings</h2>
       <label for="apiKey" class="label">Anthropic API key</label>
       <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…" />
+      <label for="workspaceId" class="label">Workspace ID <span class="muted">(only if asked)</span></label>
+      <input id="workspaceId" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="wrkspc_…" />
+      <p class="muted small">
+        Some keys work across several workspaces and need this. Find it in the Console under Settings → Workspaces.
+      </p>
       <p class="muted small">
         Stored only on this device and sent only to Anthropic's API.
         Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
