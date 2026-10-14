@@ -7,7 +7,7 @@ Describe the game you want in plain words ("a platformer where a cat collects fi
 ## How it works
 
 - It's a mobile-first web app you can install on your phone's home screen (PWA).
-- You type an idea (or leave it empty), answer a few funny questions about the hero, setting and twists, and the app asks Claude to write a small, self-contained HTML5 game with touch controls from your answers.
+- You type an idea (or leave it empty), and Professor Pixelwhisk, an animated mad scientist, interviews you one question at a time, teasing each answer and picking the next question based on what you said (Claude Opus 5.5 at low effort). Then the app asks Claude to write a small, self-contained HTML5 game with touch controls from your answers.
 - The game runs in a sandboxed frame inside the app. Tap ✏️ to change it with another prompt.
 - Games are saved in your browser on that device.
 - You add your own Anthropic API key in Settings (⚙️). It stays on your device and is only sent to Anthropic's API. Each build is billed to that key.
