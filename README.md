@@ -28,4 +28,6 @@ npm run build  # outputs dist/
 
 The Android app (`.github/workflows/android.yml`) is a Capacitor shell that loads the Pages site, so it always runs the latest version. Each push to `main` publishes `game-builder.apk` on the [latest release](https://github.com/Bagietu/game-builder/releases/latest). It is signed with the debug key in `android-support/` so new APKs install over old ones.
 
+**Keeping a game:** in the player, 📲 offers "Save as a file" (one offline HTML file) or "Make it an app". The latter commits the game to `games/<slug>/game.html` with a GitHub fine-grained token (Contents: read and write on this repo) stored on the device. Pages then serves it as an installable page at `/games/<slug>/`, and `.github/workflows/game-apks.yml` builds `<slug>.apk` into the release `game-<slug>`.
+
 Code lives in `src/` (bundled with esbuild into `dist/app.js`) and static files in `public/`.
