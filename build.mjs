@@ -1,10 +1,14 @@
 import * as esbuild from "esbuild";
-import { cpSync, rmSync } from "node:fs";
+import { cpSync, rmSync, writeFileSync } from "node:fs";
 
 const serve = process.argv.includes("--serve");
+// CI sets APP_VERSION (1.<commit count>); local builds are "dev".
+const version = process.env.APP_VERSION || "dev";
+const builtAt = new Date().toISOString();
 
 rmSync("dist", { recursive: true, force: true });
 cpSync("public", "dist", { recursive: true });
+writeFileSync("dist/version.json", JSON.stringify({ version, builtAt }));
 
 const options = {
   entryPoints: ["src/main.js"],
@@ -14,6 +18,10 @@ const options = {
   target: "es2022",
   minify: !serve,
   sourcemap: serve,
+  define: {
+    __APP_VERSION__: JSON.stringify(version),
+    __BUILT_AT__: JSON.stringify(builtAt),
+  },
 };
 
 if (serve) {

@@ -8,9 +8,13 @@
     "dev": "node build.mjs --serve"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.133.0"
+    "@anthropic-ai/sdk": "0.133.0",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.5.3"
   },
   "devDependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/cli": "8.5.3",
     "esbuild": "0.25.10"
   }
 }

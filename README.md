@@ -26,4 +26,6 @@ npm run dev    # http://localhost:8000, rebuilds on change
 npm run build  # outputs dist/
 ```
 
+The Android app (`.github/workflows/android.yml`) is a Capacitor shell that loads the Pages site, so it always runs the latest version. Each push to `main` publishes `game-builder.apk` on the [latest release](https://github.com/Bagietu/game-builder/releases/latest). It is signed with the debug key in `android-support/` so new APKs install over old ones.
+
 Code lives in `src/` (bundled with esbuild into `dist/app.js`) and static files in `public/`.
