@@ -1,7 +1,8 @@
 import { professorTurn, generateGame } from "./generate.js";
 import { ensureUnlocked } from "./lock.js";
+import { saveAsFile, publishGame, checkPublished, gameLinks } from "./install.js";
 import { Professor, GREETINGS, THINKING_LINES, BUILD_LINES, pick } from "./professor.js";
-import { getApiKey, setApiKey, getWorkspaceId, setWorkspaceId, listGames, saveGame, deleteGame } from "./storage.js";
+import { getApiKey, setApiKey, getWorkspaceId, setWorkspaceId, getGithubToken, setGithubToken, listGames, saveGame, deleteGame } from "./storage.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -366,11 +367,125 @@ function openPlayerInPlace(game) {
   $("tweakPanel").hidden = true;
 }
 
+// ---------- Keep a game (file / app) ----------
+
+let watchTimer = null;
+
+function openKeep() {
+  if (!currentGame) return;
+  $("keepError").hidden = true;
+  $("tokenBox").hidden = true;
+  renderPublishStatus(currentGame);
+  $("keep").showModal();
+}
+
+function closeKeep() {
+  clearInterval(watchTimer);
+  if ($("keep").open) $("keep").close();
+}
+
+async function publishCurrent() {
+  const game = currentGame;
+  if (!game) return;
+  if (!(await ensureUnlocked())) return;
+  const token = getGithubToken();
+  if (!token) {
+    $("tokenBox").hidden = false;
+    $("githubToken").focus();
+    return;
+  }
+  $("keepError").hidden = true;
+  $("publishBtn").disabled = true;
+  $("publishBtn").textContent = "Uploading…";
+  try {
+    const slug = await publishGame(game, token);
+    const updated = { ...game, slug, publishedAt: Date.now(), publishedHash: hashText(game.html) };
+    saveGame(updated);
+    currentGame = updated;
+    renderGallery();
+    renderPublishStatus(updated);
+  } catch (err) {
+    showError($("keepError"), err);
+  } finally {
+    $("publishBtn").disabled = false;
+    $("publishBtn").textContent = "📲 Make it an app";
+  }
+}
+
+function renderPublishStatus(game) {
+  clearInterval(watchTimer);
+  const box = $("publishStatus");
+  if (!game.slug || !game.publishedAt) {
+    box.hidden = true;
+    return;
+  }
+  const links = gameLinks(game.slug);
+  // If the game changed after publishing, the online copy is the older version.
+  const changedSince = game.publishedHash !== hashText(game.html);
+  const state = { page: changedSince, apk: changedSince };
+  const draw = () => {
+    box.replaceChildren();
+    const line = (done, doneHtml, waitText) => {
+      const div = document.createElement("div");
+      div.className = "step";
+      if (done) {
+        div.innerHTML = doneHtml;
+      } else {
+        const label = document.createElement("span");
+        label.textContent = waitText;
+        div.innerHTML = `<div class="spinner"></div>`;
+        div.append(label);
+      }
+      box.append(div);
+    };
+    line(state.page, `✅ <a href="${links.page}" target="_blank" rel="noopener">Open the game</a>, then use "Add to Home screen"`, "Putting the game online…");
+    line(state.apk, `✅ <a href="${links.apk}">Download the APK</a>`, "Building the APK (a few minutes)…");
+    if (changedSince) {
+      const note = document.createElement("p");
+      note.className = "muted small";
+      note.textContent = "You changed the game since publishing. Tap “Make it an app” again to update it.";
+      box.append(note);
+    }
+  };
+  const check = async () => {
+    const token = getGithubToken();
+    if (!token) return;
+    Object.assign(state, await checkPublished(game.slug, token, game.html, game.publishedAt));
+    draw();
+    if (state.page && state.apk) clearInterval(watchTimer);
+  };
+  box.hidden = false;
+  draw();
+  if (changedSince) return;
+  check();
+  watchTimer = setInterval(check, 15_000);
+}
+
+function hashText(text) {
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return h;
+}
+
+$("keepBtn").addEventListener("click", openKeep);
+$("keepClose").addEventListener("click", closeKeep);
+$("keep").addEventListener("close", () => clearInterval(watchTimer));
+$("saveFileBtn").addEventListener("click", () => currentGame && saveAsFile(currentGame));
+$("publishBtn").addEventListener("click", publishCurrent);
+$("tokenSaveBtn").addEventListener("click", () => {
+  const token = $("githubToken").value.trim();
+  if (!token) return $("githubToken").focus();
+  setGithubToken(token);
+  $("tokenBox").hidden = true;
+  publishCurrent();
+});
+
 // ---------- Settings ----------
 
 function openSettings() {
   $("apiKey").value = getApiKey();
   $("workspaceId").value = getWorkspaceId();
+  $("githubTokenSettings").value = getGithubToken();
   $("settings").showModal();
 }
 
@@ -379,6 +494,7 @@ $("settings").addEventListener("close", () => {
   if ($("settings").returnValue === "save") {
     setApiKey($("apiKey").value.trim());
     setWorkspaceId($("workspaceId").value.trim());
+    setGithubToken($("githubTokenSettings").value.trim());
   }
 });
 

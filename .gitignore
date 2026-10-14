@@ -1,3 +1,6 @@
 node_modules/
 dist/
 android/
+www-game/
+*.apk
+capacitor.config.json.bak

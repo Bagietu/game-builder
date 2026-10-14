@@ -287,3 +287,8 @@ dialog.shake { animation: shake-dialog 0.35s; }
   font-weight: 700;
 }
 #apkLink a { color: var(--accent-2); font-weight: 700; }
+
+.publish-status { background: var(--card-2); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.publish-status a { color: var(--accent-2); font-weight: 700; }
+.publish-status .step { display: flex; gap: 8px; align-items: center; }
+#keep b { color: var(--text); }

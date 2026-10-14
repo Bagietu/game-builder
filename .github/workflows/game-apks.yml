@@ -1,0 +1,88 @@
+name: Build game apps
+
+# When a game is published to games/<slug>/game.html, build it into its own APK
+# and attach it to the release "game-<slug>".
+on:
+  push:
+    branches: [main]
+    paths: ["games/**"]
+  # PRs that touch the build check it with a sample game (no release).
+  pull_request:
+    paths: [".github/workflows/game-apks.yml", "android-support/**"]
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: Game folder name under games/
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  find:
+    runs-on: ubuntu-latest
+    outputs:
+      slugs: ${{ steps.list.outputs.slugs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: list
+        env:
+          BEFORE: ${{ github.event.before }}
+          INPUT_SLUG: ${{ github.event.inputs.slug }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            mkdir -p games/sample && cp android-support/sample-game.html games/sample/game.html
+            slugs=sample
+          elif [ -n "$INPUT_SLUG" ]; then
+            slugs="$INPUT_SLUG"
+          elif git cat-file -e "$BEFORE" 2>/dev/null; then
+            slugs=$(git diff --name-only "$BEFORE" HEAD -- games/ | cut -d/ -f2 | sort -u)
+          else
+            slugs=$(git show --name-only --format= HEAD -- games/ | cut -d/ -f2 | sort -u)
+          fi
+          json=$(printf '%s\n' $slugs | while read -r s; do [ -f "games/$s/game.html" ] && echo "$s"; done | jq -R . | jq -sc .)
+          echo "slugs=$json" >> "$GITHUB_OUTPUT"
+          echo "Games to build: $json"
+
+  apk:
+    needs: find
+    if: needs.find.outputs.slugs != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        slug: ${{ fromJson(needs.find.outputs.slugs) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - if: github.event_name == 'pull_request'
+        run: mkdir -p games/sample && cp android-support/sample-game.html games/sample/game.html
+      - name: Build APK
+        run: |
+          count=$(git rev-list --count HEAD -- "games/${{ matrix.slug }}")
+          count=$(( count > 0 ? count : 1 ))
+          APP_VERSION="1.$count" VERSION_CODE="$count" android-support/game-apk.sh "${{ matrix.slug }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.slug }}-apk
+          path: ${{ matrix.slug }}.apk
+      - if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: game-${{ matrix.slug }}
+          name: "Game: ${{ matrix.slug }}"
+          body: Install ${{ matrix.slug }}.apk on your Android phone. Made with Game Builder.
+          files: ${{ matrix.slug }}.apk
+          make_latest: false
+          prerelease: true

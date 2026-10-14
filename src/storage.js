@@ -1,6 +1,7 @@
 const GAMES_KEY = "gb.games";
 const API_KEY_KEY = "gb.apiKey";
 const WORKSPACE_KEY = "gb.workspaceId";
+const GITHUB_TOKEN_KEY = "gb.githubToken";
 
 function read(key, fallback) {
   try {
@@ -24,6 +25,8 @@ export const getApiKey = () => read(API_KEY_KEY, "");
 export const setApiKey = (key) => write(API_KEY_KEY, key);
 export const getWorkspaceId = () => read(WORKSPACE_KEY, "");
 export const setWorkspaceId = (id) => write(WORKSPACE_KEY, id);
+export const getGithubToken = () => read(GITHUB_TOKEN_KEY, "");
+export const setGithubToken = (token) => write(GITHUB_TOKEN_KEY, token);
 
 /** Games, newest first: { id, title, prompt, html, history: string[], updatedAt } */
 export const listGames = () => read(GAMES_KEY, []);
