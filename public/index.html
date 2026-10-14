@@ -76,6 +76,20 @@
     </div>
   </div>
 
+  <!-- Password lock -->
+  <dialog id="lock">
+    <form id="lockForm" class="settings-form">
+      <h2>🔒 Lab access</h2>
+      <p class="muted small">The professor only builds games for people who know the password.</p>
+      <input id="lockInput" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" />
+      <p id="lockError" class="error" hidden>Wrong password. The professor is unimpressed.</p>
+      <div class="row">
+        <button id="lockCancel" type="button" class="secondary">Cancel</button>
+        <button value="unlock" class="primary">Unlock</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Settings -->
   <dialog id="settings">
     <form method="dialog" class="settings-form">
@@ -92,7 +106,7 @@
         Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
       </p>
       <div class="row">
-        <button value="cancel" class="secondary">Cancel</button>
+        <button id="cancelSettings" type="button" class="secondary">Cancel</button>
         <button id="saveSettings" value="save" class="primary">Save</button>
       </div>
     </form>

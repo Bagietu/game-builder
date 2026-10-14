@@ -1,4 +1,5 @@
 import { professorTurn, generateGame } from "./generate.js";
+import { ensureUnlocked } from "./lock.js";
 import { Professor, GREETINGS, THINKING_LINES, BUILD_LINES, pick } from "./professor.js";
 import { getApiKey, setApiKey, getWorkspaceId, setWorkspaceId, listGames, saveGame, deleteGame } from "./storage.js";
 
@@ -43,7 +44,8 @@ function requireKey() {
 // Step 1: the professor interviews the player, one adaptive question at a time.
 let interview = null;
 
-function start() {
+async function start() {
+  if (!(await ensureUnlocked())) return;
   const apiKey = requireKey();
   if (!apiKey) return;
   $("error").hidden = true;
@@ -283,6 +285,7 @@ function closePlayer() {
 async function tweak() {
   const prompt = $("tweakPrompt").value.trim();
   if (!prompt || !currentGame) return;
+  if (!(await ensureUnlocked())) return;
   const apiKey = requireKey();
   if (!apiKey) return;
 
@@ -325,6 +328,7 @@ function openSettings() {
   $("settings").showModal();
 }
 
+$("cancelSettings").addEventListener("click", () => $("settings").close("cancel"));
 $("settings").addEventListener("close", () => {
   if ($("settings").returnValue === "save") {
     setApiKey($("apiKey").value.trim());
