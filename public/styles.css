@@ -271,3 +271,6 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 @media (prefers-reduced-motion: reduce) {
   .prof-svg *, .quiz { animation: none !important; }
 }
+
+dialog.shake { animation: shake-dialog 0.35s; }
+@keyframes shake-dialog { 25% { transform: translateX(-8px); } 75% { transform: translateX(8px); } }
