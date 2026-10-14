@@ -1,5 +1,5 @@
 // Keeps the app shell available offline. API calls go straight to the network.
-const CACHE = "game-builder-v1";
+const CACHE = "game-builder-v2";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (event) => {

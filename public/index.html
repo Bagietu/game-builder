@@ -14,9 +14,14 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>🎮 Game Builder</h1>
+    <div>
+      <h1>🎮 Game Builder</h1>
+      <div id="version" class="version"></div>
+    </div>
     <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙️</button>
   </header>
+
+  <button id="updateBanner" class="update-banner" hidden>✨ A new version is ready. Tap to update.</button>
 
   <main>
     <section class="stage">
@@ -108,6 +113,10 @@
       <p class="muted small">
         Stored only on this device and sent only to Anthropic's API.
         Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
+      </p>
+      <p id="settingsVersion" class="muted small"></p>
+      <p id="apkLink" class="small" hidden>
+        <a href="https://github.com/Bagietu/game-builder/releases/latest/download/game-builder.apk">📲 Download the Android app (APK)</a>
       </p>
       <div class="row">
         <button id="cancelSettings" type="button" class="secondary">Cancel</button>

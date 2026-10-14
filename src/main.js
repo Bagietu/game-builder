@@ -382,6 +382,35 @@ $("settings").addEventListener("close", () => {
   }
 });
 
+// ---------- Version & updates ----------
+
+/* global __APP_VERSION__, __BUILT_AT__ */
+const isApp = Boolean(window.Capacitor?.isNativePlatform?.());
+
+function showVersion() {
+  const built = new Date(__BUILT_AT__).toLocaleString();
+  $("version").textContent = `Version ${__APP_VERSION__}`;
+  $("settingsVersion").textContent = `Version ${__APP_VERSION__} · built ${built}${isApp ? " · Android app" : ""}`;
+  $("apkLink").hidden = isApp || !/android/i.test(navigator.userAgent);
+}
+
+// Compare against the deployed version.json and offer a reload when it changed.
+async function checkForUpdate() {
+  if (__APP_VERSION__ === "dev") return;
+  try {
+    const res = await fetch("version.json", { cache: "no-store" });
+    const { version } = await res.json();
+    $("updateBanner").hidden = !version || version === __APP_VERSION__;
+  } catch {}
+}
+
+$("updateBanner").addEventListener("click", async () => {
+  const reg = await navigator.serviceWorker?.getRegistration();
+  await reg?.update().catch(() => {});
+  location.reload();
+});
+document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && checkForUpdate());
+
 // ---------- Wiring ----------
 
 $("buildBtn").addEventListener("click", start);
@@ -407,6 +436,8 @@ window.addEventListener("popstate", closePlayer);
 
 renderIdeas();
 renderGallery();
+showVersion();
+checkForUpdate();
 prof.say(pick(GREETINGS));
 if (!getApiKey()) openSettings();
 

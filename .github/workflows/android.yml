@@ -1,0 +1,51 @@
+name: Build Android app
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Set version
+        run: |
+          count=$(git rev-list --count HEAD)
+          echo "APP_VERSION=1.$count" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$count" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run build
+      - run: android-support/prepare.sh
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk game-builder.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: game-builder-apk
+          path: game-builder.apk
+      - name: Publish release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.APP_VERSION }}
+          name: Game Builder ${{ env.APP_VERSION }}
+          body: Install game-builder.apk on your Android phone. The app always loads the latest version of the site.
+          files: game-builder.apk
+          make_latest: true

@@ -1,0 +1,12 @@
+{
+  "appId": "io.github.bagietu.gamebuilder",
+  "appName": "Game Builder",
+  "webDir": "dist",
+  "server": {
+    "url": "https://bagietu.github.io/game-builder/",
+    "androidScheme": "https"
+  },
+  "android": {
+    "backgroundColor": "#14121f"
+  }
+}

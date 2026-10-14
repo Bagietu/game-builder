@@ -274,3 +274,16 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 
 dialog.shake { animation: shake-dialog 0.35s; }
 @keyframes shake-dialog { 25% { transform: translateX(-8px); } 75% { transform: translateX(8px); } }
+
+.version { color: var(--muted); font-size: 0.75rem; margin-top: 2px; }
+.update-banner {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 0 16px 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--accent-2);
+  color: #062a30;
+  font-weight: 700;
+}
+#apkLink a { color: var(--accent-2); font-weight: 700; }
