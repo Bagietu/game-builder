@@ -292,3 +292,21 @@ dialog.shake { animation: shake-dialog 0.35s; }
 .publish-status a { color: var(--accent-2); font-weight: 700; }
 .publish-status .step { display: flex; gap: 8px; align-items: center; }
 #keep b { color: var(--text); }
+
+.live { display: flex; flex-direction: column; gap: 6px; }
+.live-bar { height: 10px; border-radius: 999px; background: var(--card-2); overflow: hidden; }
+.live-bar i {
+  display: block; height: 100%; width: 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.6s ease;
+}
+.live-label { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
+.live pre {
+  margin: 0; padding: 10px; border-radius: 10px; background: #0d0b16;
+  font-size: 0.72rem; line-height: 1.4; white-space: pre-wrap; word-break: break-word;
+  overflow-y: auto; max-height: 140px;
+}
+.live-thinking { color: #d8d0ff; font-style: italic; }
+.live-code { color: #7ee7c7; font-family: ui-monospace, Menlo, monospace; min-height: 3em; }
+.live-code:empty::before { content: "Waiting for the first line of code…"; color: var(--muted); }
+.tweak .live pre { max-height: 70px; }

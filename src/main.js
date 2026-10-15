@@ -217,13 +217,14 @@ async function build(idea, answers) {
   const quips = setInterval(() => prof.set(pick(BUILD_LINES), "working"), 3500);
   setTimeout(() => prof.set(pick(BUILD_LINES), "working"), 1500);
   abort = new AbortController();
-  const ticker = progressTicker($("progressText"));
+  const ticker = progressTicker($("progressText"), $("buildLive"));
   try {
     const { html, title } = await generateGame({
       apiKey,
       prompt,
       signal: abort.signal,
-      onProgress: (n) => ticker.update(n),
+      onProgress: (n, text) => ticker.update(n, text),
+      onThinking: (text) => ticker.thinking(text),
       onRetry: (n) => {
         ticker.retry(n);
         prof.set("The connection fizzled! Rewiring the doohickey and starting over…", "working");
@@ -254,32 +255,59 @@ function resetBuilder() {
   $("form").hidden = false;
 }
 
-/** Progress text with a running clock, so a stuck build is obvious. */
-function progressTicker(el) {
+// Typical game size, used only to pace the progress bar while code streams in.
+const EXPECTED_CHARS = 20_000;
+
+/** Progress text with a running clock, a progress bar, live thinking and live code. */
+function progressTicker(el, live) {
   const started = Date.now();
+  const bar = live.querySelector(".live-bar i");
+  const thinkingEl = live.querySelector(".live-thinking");
+  const codeEl = live.querySelector(".live-code");
   let chars = 0;
+  let thinkingStart = started;
   let note = "";
+  thinkingEl.textContent = "Warming up the brain…";
+  codeEl.textContent = "";
+  live.hidden = false;
+
   const render = () => {
     const secs = Math.floor((Date.now() - started) / 1000);
     el.textContent = `${note}${progressLabel(chars)} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+    // Thinking creeps toward 15%; writing fills the rest, slowing as it nears the end.
+    const thinkingPct = 15 * (1 - Math.exp(-(Date.now() - thinkingStart) / 60_000));
+    const pct = chars ? 15 + 83 * (1 - Math.exp(-chars / EXPECTED_CHARS)) : thinkingPct;
+    bar.style.width = `${pct.toFixed(1)}%`;
   };
+  const scrollDown = (pre) => (pre.scrollTop = pre.scrollHeight);
   const timer = setInterval(render, 1000);
   render();
   return {
-    update(n) {
+    update(n, text) {
       chars = n;
+      codeEl.textContent = text.slice(-1500);
+      scrollDown(codeEl);
       render();
+    },
+    thinking(text) {
+      if (!text) return;
+      thinkingEl.textContent = text.slice(-600);
+      scrollDown(thinkingEl);
     },
     retry(n) {
       note = `Connection lost, restarted (try ${n + 1}). `;
+      thinkingStart = Date.now();
       render();
     },
-    stop: () => clearInterval(timer),
+    stop() {
+      clearInterval(timer);
+      live.hidden = true;
+    },
   };
 }
 
 function progressLabel(chars) {
-  return chars === 0 ? "Designing your game…" : `Writing code… ${Math.round(chars / 1000)}k characters`;
+  return chars === 0 ? "Thinking up your game…" : `Writing code… ${chars < 1000 ? chars : `${Math.round(chars / 1000)}k`} characters`;
 }
 
 // Keep the screen on while building: phones cut the connection when it sleeps.
@@ -388,14 +416,15 @@ async function tweak() {
   const game = currentGame;
   setBusy(true, $("tweakBtn"), $("tweakProgress"), $("tweakError"));
   abort = new AbortController();
-  const ticker = progressTicker($("tweakProgressText"));
+  const ticker = progressTicker($("tweakProgressText"), $("tweakLive"));
   try {
     const { html, title } = await generateGame({
       apiKey,
       prompt,
       currentHtml: game.html,
       signal: abort.signal,
-      onProgress: (n) => ticker.update(n),
+      onProgress: (n, text) => ticker.update(n, text),
+      onThinking: (text) => ticker.thinking(text),
       onRetry: (n) => ticker.retry(n),
     });
     const updated = { ...game, html, title: title || game.title, history: [...game.history, prompt] };
