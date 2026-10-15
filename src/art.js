@@ -1,33 +1,13 @@
 // Game art from Google's Gemini image models: generate, cut out the background, shrink, store.
 
-const API = "https://generativelanguage.googleapis.com/v1beta";
-let modelPromise = null;
+import { gemini, listModels } from "./gemini.js";
 
-async function gemini(key, path, init = {}) {
-  const res = await fetch(`${API}/${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", "x-goog-api-key": key, ...init.headers },
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = body?.error?.message || `HTTP ${res.status}`;
-    throw new Error(res.status === 400 && /api key/i.test(msg) ? "Gemini rejected the API key." : `Gemini: ${msg}`);
-  }
-  return body;
-}
-
-/** Pick an image-capable Gemini model from what this key can use (names change often). */
-function imageModel(key) {
-  modelPromise ??= gemini(key, "models?pageSize=200").then(({ models = [] }) => {
-    const usable = models.filter(
-      (m) => /image/i.test(m.name) && !/imagen/i.test(m.name) && m.supportedGenerationMethods?.includes("generateContent"),
-    );
-    const pick = usable.find((m) => /flash/i.test(m.name) && !/lite/i.test(m.name)) || usable[0];
-    if (!pick) throw new Error("This Gemini key has no image model available.");
-    return pick.name; // e.g. "models/…"
-  });
-  modelPromise.catch(() => (modelPromise = null));
-  return modelPromise;
+/** Pick an image-capable Gemini model from what this key can use. */
+async function imageModel(key) {
+  const usable = (await listModels(key)).filter((m) => /image/i.test(m.name) && !/imagen/i.test(m.name));
+  const pick = usable.find((m) => /flash/i.test(m.name) && !/lite/i.test(m.name)) || usable[0];
+  if (!pick) throw new Error("This Gemini key has no image model available.");
+  return pick.name; // e.g. "models/…"
 }
 
 async function generateImage(key, prompt, signal) {

@@ -63,21 +63,29 @@ export class Professor {
     this.stage.dataset.mood = mood;
   }
 
-  /** Type text into the bubble while the mouth moves. Resolves when done. */
-  say(text, { mood = "talking", after = "idle" } = {}) {
+  /** Type text into the bubble while the mouth moves. `lead` stays shown above it. Resolves when done. */
+  say(text, { mood = "talking", after = "idle", lead = "" } = {}) {
     clearInterval(this.typing);
     this.setMood(mood);
-    this.text.textContent = "";
+    const line = document.createElement("span");
+    if (lead) {
+      const r = document.createElement("span");
+      r.className = "reaction";
+      r.textContent = lead;
+      this.text.replaceChildren(r, line);
+    } else {
+      this.text.replaceChildren(line);
+    }
     const chars = [...text];
     let i = 0;
     return new Promise((resolve) => {
       if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-        this.text.textContent = text;
+        line.textContent = text;
         this.setMood(after);
         return resolve();
       }
       this.typing = setInterval(() => {
-        this.text.textContent += chars[i++] ?? "";
+        line.textContent += chars[i++] ?? "";
         if (i >= chars.length) {
           clearInterval(this.typing);
           this.setMood(after);
