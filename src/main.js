@@ -2,7 +2,7 @@ import { professorTurn, generateGame } from "./generate.js";
 import { ensureUnlocked } from "./lock.js";
 import { saveAsFile, publishGame, checkPublished, gameLinks } from "./install.js";
 import { Professor, GREETINGS, THINKING_LINES, BUILD_LINES, pick } from "./professor.js";
-import { getApiKey, setApiKey, getWorkspaceId, setWorkspaceId, getGithubToken, setGithubToken, listGames, saveGame, deleteGame } from "./storage.js";
+import { getApiKey, setApiKey, getWorkspaceId, setWorkspaceId, getGithubToken, setGithubToken, getPendingBuild, setPendingBuild, listGames, saveGame, deleteGame } from "./storage.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -205,6 +205,7 @@ function composePrompt(idea, answers) {
 // Step 2: build the game from the idea plus the player's answers.
 async function build(idea, answers) {
   interview = null;
+  $("resumeBox").hidden = true;
   $("quiz").hidden = true;
   $("form").hidden = true;
   const apiKey = requireKey();
@@ -218,6 +219,8 @@ async function build(idea, answers) {
   setTimeout(() => prof.set(pick(BUILD_LINES), "working"), 1500);
   abort = new AbortController();
   const ticker = progressTicker($("progressText"), $("buildLive"));
+  // Remembered until the build ends, so a page reload mid-build can offer to redo it.
+  setPendingBuild({ kind: "build", idea, answers, at: Date.now() });
   try {
     const { html, title } = await generateGame({
       apiKey,
@@ -242,6 +245,7 @@ async function build(idea, answers) {
     prof.set("Kaboom. That wasn't supposed to happen. Shall we try again?", "idle");
     showError($("error"), err);
   } finally {
+    setPendingBuild(null);
     clearInterval(quips);
     ticker.stop();
     abort = null;
@@ -417,6 +421,7 @@ async function tweak() {
   setBusy(true, $("tweakBtn"), $("tweakProgress"), $("tweakError"));
   abort = new AbortController();
   const ticker = progressTicker($("tweakProgressText"), $("tweakLive"));
+  setPendingBuild({ kind: "tweak", gameId: game.id, prompt, at: Date.now() });
   try {
     const { html, title } = await generateGame({
       apiKey,
@@ -435,6 +440,7 @@ async function tweak() {
   } catch (err) {
     showError($("tweakError"), err);
   } finally {
+    setPendingBuild(null);
     ticker.stop();
     abort = null;
     setBusy(false, $("tweakBtn"), $("tweakProgress"));
@@ -608,6 +614,39 @@ $("updateBanner").addEventListener("click", async () => {
 });
 document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && checkForUpdate());
 
+// ---------- Interrupted builds ----------
+
+/** If the page reloaded mid-build (phone asleep, app killed), offer to run it again. */
+function offerResume() {
+  const job = getPendingBuild();
+  if (!job) return;
+  const game = job.kind === "tweak" ? listGames().find((g) => g.id === job.gameId) : null;
+  if (job.kind === "tweak" && !game) return setPendingBuild(null);
+  $("resumeText").textContent =
+    job.kind === "tweak"
+      ? `Your change to "${game.title}" got interrupted when the page reloaded.`
+      : `Your last game ("${job.idea || "surprise game"}") got interrupted when the page reloaded. All your answers are saved.`;
+  $("resumeBox").hidden = false;
+  prof.say("Blast! Someone pulled the plug mid-experiment. Shall I start it again?", { mood: "thinking" });
+  $("resumeBtn").onclick = async () => {
+    $("resumeBox").hidden = true;
+    setPendingBuild(null);
+    if (!(await ensureUnlocked())) return;
+    if (job.kind === "tweak") {
+      openPlayer(game);
+      $("tweakPanel").hidden = false;
+      $("tweakPrompt").value = job.prompt;
+      tweak();
+    } else {
+      build(job.idea, job.answers);
+    }
+  };
+  $("resumeDismiss").onclick = () => {
+    $("resumeBox").hidden = true;
+    setPendingBuild(null);
+  };
+}
+
 // ---------- Wiring ----------
 
 $("buildBtn").addEventListener("click", start);
@@ -637,6 +676,7 @@ showVersion();
 checkForUpdate();
 prof.say(pick(GREETINGS));
 if (!getApiKey()) openSettings();
+offerResume();
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").catch(() => {});

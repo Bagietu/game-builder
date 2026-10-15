@@ -4,7 +4,8 @@
   "webDir": "dist",
   "server": {
     "url": "https://bagietu.github.io/game-builder/",
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "errorPath": "offline.html"
   },
   "android": {
     "backgroundColor": "#14121f"
