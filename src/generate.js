@@ -183,9 +183,66 @@ export async function planGame({ apiKey, prompt, ...callbacks }) {
   return text.trim();
 }
 
+const ART_SCHEMA = {
+  type: "object",
+  properties: {
+    style: { type: "string" },
+    assets: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          key: { type: "string" },
+          kind: { type: "string", enum: ["sprite", "background"] },
+          description: { type: "string" },
+        },
+        required: ["key", "kind", "description"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["style", "assets"],
+  additionalProperties: false,
+};
+
+/** From the plan, the images worth having drawn: { style, assets: [{ key, kind, description }] }. */
+export async function listArt({ apiKey, plan, signal }) {
+  const client = makeClient(apiKey);
+  try {
+    const message = await client.beta.messages.create(
+      {
+        model: MODEL,
+        max_tokens: 4000,
+        output_config: { effort: "low", format: { type: "json_schema", schema: ART_SCHEMA } },
+        system: `An image model will draw art for a 2D phone game from this design plan. Choose up to 6 images that matter most: the player character, main enemies or obstacles, key pickups, and at most one background. Use short lowercase keys like "hero" or "slime". Each description says exactly what to draw (look, colors, pose) for a single image. "style" is one shared art style line, e.g. "bright cartoon, thick dark outlines, soft shading". Repeated or tiny things (bullets, particles, tiles, UI) are drawn in code, so leave them out.`,
+        messages: [{ role: "user", content: plan }],
+      },
+      { signal },
+    );
+    const parsed = JSON.parse(message.content.find((b) => b.type === "text")?.text || "{}");
+    const seen = new Set();
+    const assets = (parsed.assets || [])
+      .map((a) => ({ ...a, key: a.key.toLowerCase().replace(/[^a-z0-9_]/g, "_") }))
+      .filter((a) => a.key && !seen.has(a.key) && seen.add(a.key))
+      .slice(0, 6);
+    return { style: parsed.style || "colorful cartoon", assets };
+  } catch (err) {
+    throw new GenerationError(describeApiError(err));
+  }
+}
+
+/** Tells the developer which drawn images exist and how to load them. */
+export function artNote(assets) {
+  const entries = Object.entries(assets || {});
+  if (!entries.length) return "";
+  const lines = entries.map(([k, a]) => `- "${k}" (${a.kind}, ${a.w}x${a.h}px${a.kind === "sprite" ? ", transparent PNG" : ""}): ${a.description}`);
+  return `Drawn images are available. At runtime window.GAME_ASSETS maps each key to an image data URL. Load them in a Phaser preload() with this.load.image(key, window.GAME_ASSETS[key]) and use them for these things instead of drawing them in code; scale with setDisplaySize/setScale to fit the game. Flip sprites with setFlipX to face left. Draw everything else in code. If window.GAME_ASSETS or a key is missing, fall back to code-drawn graphics.\n${lines.join("\n")}`;
+}
+
 /** Step 2: build the whole game from the brief and plan. */
-export async function generateGame({ apiKey, prompt, plan, ...callbacks }) {
-  const content = plan ? `Player's brief:\n${prompt}\n\nDesign plan:\n${plan}` : `Player's brief:\n${prompt}`;
+export async function generateGame({ apiKey, prompt, plan, assets, ...callbacks }) {
+  const art = artNote(assets);
+  const content = [`Player's brief:\n${prompt}`, plan && `Design plan:\n${plan}`, art].filter(Boolean).join("\n\n");
   const { message, text } = await streamWithRetries(
     apiKey,
     { system: BUILD_PROMPT, effort: "high", maxTokens: 128000, content },
@@ -205,8 +262,9 @@ export async function generateGame({ apiKey, prompt, plan, ...callbacks }) {
  * Change an existing game: a player's request, or bugs from the playtest.
  * Claude sends small search/replace edits, so big games stay cheap and fast to change.
  */
-export async function editGame({ apiKey, html, change, ...callbacks }) {
-  const content = `Current game:\n\n${html}\n\nChange to make:\n${change}`;
+export async function editGame({ apiKey, html, change, assets, ...callbacks }) {
+  const art = artNote(assets);
+  const content = `Current game:\n\n${html}\n\n${art ? art + "\n\n" : ""}Change to make:\n${change}`;
   const { message, text } = await streamWithRetries(
     apiKey,
     { system: EDIT_PROMPT, effort: "medium", maxTokens: 128000, content },

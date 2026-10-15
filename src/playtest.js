@@ -3,8 +3,16 @@ import { PHASER_URL, PHASER_TAG } from "./generate.js";
 
 let phaserSource = null;
 
-/** The game with Phaser inlined, so it runs offline, from a saved file, or as an installed app. */
-export async function withPhaser(html) {
+/**
+ * The game ready to run: Phaser inlined (so it works offline, from a saved file or as an installed
+ * app) and its Gemini art, if any, provided as window.GAME_ASSETS.
+ */
+export async function withPhaser(html, assets) {
+  if (assets && Object.keys(assets).length) {
+    const urls = Object.fromEntries(Object.entries(assets).map(([k, a]) => [k, a.url]));
+    const script = `<script>window.GAME_ASSETS=${JSON.stringify(urls)};</script>`;
+    html = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + script) : script + html;
+  }
   if (!html.includes(PHASER_URL)) return html;
   if (!phaserSource) {
     // Same file, served from this app (and cached by the service worker).
@@ -41,8 +49,8 @@ const IGNORED = [/^Script error\.?$/i, /ResizeObserver loop/i, /AudioContext/i, 
  * Run the game in `frame` for a few seconds while a robot taps and presses keys.
  * Resolves with the distinct errors it hit (empty when the game ran cleanly).
  */
-export async function playtest(html, frame, { seconds = 9, signal } = {}) {
-  const ready = await withPhaser(html);
+export async function playtest(html, frame, { seconds = 9, signal, assets } = {}) {
+  const ready = await withPhaser(html, assets);
   const probed = /<head[^>]*>/i.test(ready) ? ready.replace(/<head[^>]*>/i, (m) => m + PROBE) : PROBE + ready;
   const errors = new Set();
   const onMessage = (e) => {

@@ -3,6 +3,7 @@ const API_KEY_KEY = "gb.apiKey";
 const WORKSPACE_KEY = "gb.workspaceId";
 const GITHUB_TOKEN_KEY = "gb.githubToken";
 const PENDING_KEY = "gb.pendingBuild";
+const GEMINI_KEY = "gb.geminiKey";
 
 function read(key, fallback) {
   try {
@@ -28,6 +29,8 @@ export const getWorkspaceId = () => read(WORKSPACE_KEY, "");
 export const setWorkspaceId = (id) => write(WORKSPACE_KEY, id);
 export const getGithubToken = () => read(GITHUB_TOKEN_KEY, "");
 export const setGithubToken = (token) => write(GITHUB_TOKEN_KEY, token);
+export const getGeminiKey = () => read(GEMINI_KEY, "");
+export const setGeminiKey = (key) => write(GEMINI_KEY, key);
 
 /** A build or change that was running when the page went away: { kind, ... }. */
 export const getPendingBuild = () => read(PENDING_KEY, null);

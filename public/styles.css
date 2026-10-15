@@ -324,3 +324,8 @@ dialog.shake { animation: shake-dialog 0.35s; }
 .admin > * + * { margin-top: 8px; }
 .admin input { background: var(--card); }
 #adminStatus.ok { color: #6ee7b7; }
+.live-art { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.live-art figure { margin: 0; background: repeating-conic-gradient(#2a2640 0 25%, #1f1c30 0 50%) 0 0 / 16px 16px; border-radius: 10px; padding: 6px; display: grid; place-items: center; aspect-ratio: 1; }
+.live-art img { max-width: 100%; max-height: 100%; animation: pop 0.3s ease-out; }
+.live-art figure.bg { grid-column: span 3; aspect-ratio: 16 / 9; padding: 0; overflow: hidden; }
+.live-art figure.bg img { width: 100%; height: 100%; object-fit: cover; }

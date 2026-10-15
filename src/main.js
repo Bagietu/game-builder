@@ -1,10 +1,11 @@
-import { professorTurn, planGame, generateGame, editGame, GenerationError } from "./generate.js";
+import { professorTurn, planGame, listArt, generateGame, editGame, GenerationError } from "./generate.js";
+import { drawAssets, saveArt, loadArt, deleteArt } from "./art.js";
 import { playtest, withPhaser } from "./playtest.js";
 import { unlockApp, adoptVault } from "./lock.js";
 import { fetchVault, openVault, sealVault } from "./vault.js";
 import { saveAsFile, publishGame, checkPublished, gameLinks, commitFile } from "./install.js";
 import { Professor, GREETINGS, THINKING_LINES, BUILD_LINES, pick } from "./professor.js";
-import { getApiKey, setApiKey, getWorkspaceId, setWorkspaceId, getGithubToken, setGithubToken, getPendingBuild, setPendingBuild, listGames, saveGame, deleteGame } from "./storage.js";
+import { getApiKey, setApiKey, getWorkspaceId, setWorkspaceId, getGithubToken, setGithubToken, getPendingBuild, setPendingBuild, getGeminiKey, setGeminiKey, listGames, saveGame, deleteGame } from "./storage.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -229,17 +230,40 @@ async function build(idea, answers) {
   // Remembered until the build ends, so a page reload mid-build can offer to redo it.
   setPendingBuild({ kind: "build", idea, answers, at: Date.now() });
   try {
-    ticker.stage("Step 1/3 · Planning", 0, 8, 1500, "📝 Game plan");
+    const geminiKey = getGeminiKey();
+    const steps = geminiKey ? 4 : 3;
+    let step = 1;
+    const label = (name) => `Step ${step++}/${steps} · ${name}`;
+    const id = crypto.randomUUID();
+
+    ticker.stage(label("Planning"), 0, 8, 1500, "📝 Game plan");
     const plan = await planGame({ apiKey, prompt, signal, ...callbacks });
 
-    ticker.stage("Step 2/3 · Building", 8, 82, 40_000, "⌨️ Your game, being written");
-    const built = await generateGame({ apiKey, prompt, plan, signal, ...callbacks });
-    let game = { id: crypto.randomUUID(), title: built.title || summary, prompt, plan, html: built.html, history: [summary] };
+    let assets = {};
+    if (geminiKey) {
+      ticker.stage(label("Drawing art"), 8, 20, 0, null, { art: true });
+      prof.set("Summoning my artist friend from the Gemini dimension…", "working");
+      try {
+        const { style, assets: wanted } = await listArt({ apiKey, plan, signal });
+        ticker.artCount(wanted.length);
+        assets = await drawAssets({ key: geminiKey, assets: wanted, style, signal, onAsset: (k, a) => ticker.art(k, a) });
+        await saveArt(id, assets);
+      } catch (err) {
+        if (signal.aborted) throw new GenerationError("Cancelled.");
+        assets = {};
+        prof.set(`The artist fainted (${err.message}). I'll draw everything myself!`, "working");
+      }
+    }
+
+    const buildFrom = geminiKey ? 20 : 8;
+    ticker.stage(label("Building"), buildFrom, 82, 40_000, "⌨️ Your game, being written");
+    const built = await generateGame({ apiKey, prompt, plan, assets, signal, ...callbacks });
+    let game = { id, title: built.title || summary, prompt, plan, html: built.html, history: [summary] };
     saveGame(game); // keep the paid-for build even if the page goes away during testing
     setPendingBuild(null);
     renderGallery();
 
-    const tested = await playtestAndFix({ apiKey, html: game.html, ticker, signal, rounds: 2, from: 82, step: "Step 3/3" });
+    const tested = await playtestAndFix({ apiKey, html: game.html, assets, ticker, signal, rounds: 2, from: 82, step: `Step ${step}/${steps}` });
     game = { ...game, html: tested.html };
     saveGame(game);
     $("prompt").value = "";
@@ -279,14 +303,14 @@ const liveCallbacks = (ticker, onRetry) => ({
  * Let a robot play the game; send any errors back to Claude to fix, up to `rounds` times.
  * Resolves with { html, clean }.
  */
-async function playtestAndFix({ apiKey, html, ticker, signal, rounds, from, step }) {
+async function playtestAndFix({ apiKey, html, assets, ticker, signal, rounds, from, step }) {
   const span = (100 - from) / (rounds * 2 + 1);
   let at = from;
   for (let round = 0; ; round++) {
     ticker.stage(`${step} · ${round ? "Re-testing" : "Playtesting"}`, at, (at += span), 0, null, true);
     let errors;
     try {
-      errors = await playtest(html, ticker.frame(), { signal });
+      errors = await playtest(html, ticker.frame(), { signal, assets });
     } catch {
       return { html, clean: false }; // couldn't run the test (e.g. offline); keep the game as is
     }
@@ -297,7 +321,7 @@ async function playtestAndFix({ apiKey, html, ticker, signal, rounds, from, step
     const bugs = `${errors.length} bug${errors.length > 1 ? "s" : ""}`;
     ticker.stage(`${step} · Fixing ${bugs} (${round + 1}/${rounds})`, at, (at += span), 3000, "🔧 Fixes being written");
     const change = `An automatic playtest (a robot tapping the screen and pressing keys for a few seconds) hit these errors:\n- ${errors.join("\n- ")}\n\nFind and fix the root causes. Keep the game the same otherwise.`;
-    html = (await editGame({ apiKey, html, change, signal, ...liveCallbacks(ticker) })).html;
+    html = (await editGame({ apiKey, html, change, assets, signal, ...liveCallbacks(ticker) })).html;
   }
 }
 
@@ -314,6 +338,8 @@ function progressTicker(el, live) {
   const codeEl = live.querySelector(".live-code");
   const codeLabel = live.querySelector(".live-code-label");
   const test = live.querySelector(".live-test");
+  const artBox = live.querySelector(".live-art");
+  let artTotal = 0;
   const frame = live.querySelector(".live-frame");
   let stage = { name: "", lo: 0, hi: 100, expected: 20_000, testing: false, start: started };
   let chars = 0;
@@ -322,12 +348,19 @@ function progressTicker(el, live) {
 
   const render = () => {
     const secs = Math.floor((Date.now() - started) / 1000);
-    const doing = stage.testing ? "Tapping around…" : progressLabel(chars);
+    const drawn = artBox.children.length;
+    const doing = stage.testing
+      ? "Tapping around…"
+      : stage.art
+        ? artTotal ? `Drawing ${Math.min(drawn + 1, artTotal)} of ${artTotal}…` : "Choosing what to draw…"
+        : progressLabel(chars);
     el.textContent = `${note}${stage.name ? stage.name + " · " : ""}${doing} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
     // Within a stage: thinking creeps up to 15%, writing fills the rest, slowing near the end.
     const elapsed = Date.now() - stage.start;
     const inner = stage.testing
       ? Math.min(1, elapsed / 9000)
+      : stage.art
+        ? artTotal ? Math.min(1, (artBox.children.length + 0.5) / artTotal) : 0.05
       : chars
         ? 0.15 + 0.83 * (1 - Math.exp(-chars / stage.expected))
         : 0.15 * (1 - Math.exp(-elapsed / 60_000));
@@ -337,13 +370,16 @@ function progressTicker(el, live) {
   const timer = setInterval(render, 1000);
   return {
     /** Start a step: progress runs from lo% to hi%. */
-    stage(name, lo, hi, expected, label, testing = false) {
-      stage = { name, lo, hi, expected: expected || 1, testing, start: Date.now() };
+    stage(name, lo, hi, expected, label, mode = false) {
+      const testing = mode === true;
+      const art = Boolean(mode?.art);
+      stage = { name, lo, hi, expected: expected || 1, testing, art, start: Date.now() };
       chars = 0;
       note = "";
       test.hidden = !testing;
-      codeEl.hidden = codeLabel.hidden = testing;
-      thinkingEl.hidden = thinkingEl.previousElementSibling.hidden = testing;
+      artBox.hidden = !art && (testing || !artBox.children.length);
+      codeEl.hidden = codeLabel.hidden = testing || art;
+      thinkingEl.hidden = thinkingEl.previousElementSibling.hidden = testing || art;
       if (label) codeLabel.textContent = label;
       if (!testing) {
         codeEl.textContent = "";
@@ -352,6 +388,17 @@ function progressTicker(el, live) {
       render();
     },
     frame: () => frame,
+    artCount(n) {
+      artTotal = n;
+      render();
+    },
+    art(key, asset) {
+      const fig = document.createElement("figure");
+      if (asset.kind === "background") fig.className = "bg";
+      fig.append(Object.assign(document.createElement("img"), { src: asset.url, alt: key, title: key }));
+      artBox.append(fig);
+      render();
+    },
     update(n, text) {
       chars = n;
       codeEl.textContent = text.slice(-1500);
@@ -372,6 +419,7 @@ function progressTicker(el, live) {
     stop() {
       clearInterval(timer);
       frame.srcdoc = "";
+      artBox.replaceChildren();
       live.hidden = true;
     },
   };
@@ -443,6 +491,7 @@ function renderGallery() {
     del.addEventListener("click", () => {
       if (confirm(`Delete "${game.title}"?`)) {
         deleteGame(game.id);
+        deleteArt(game.id);
         renderGallery();
       }
     });
@@ -464,7 +513,7 @@ async function showInFrame(game) {
   $("frame").srcdoc = "";
   let html;
   try {
-    html = await withPhaser(game.html);
+    html = await withPhaser(game.html, await loadArt(game.id));
   } catch (err) {
     html = `<body style="font:16px system-ui;color:#fff;background:#14121f;padding:24px">${err.message}</body>`;
   }
@@ -503,12 +552,13 @@ async function tweak() {
   setPendingBuild({ kind: "tweak", gameId: game.id, prompt, at: Date.now() });
   try {
     ticker.stage("Changing", 0, 70, 4000, "🔧 Changes being written");
-    const changed = await editGame({ apiKey, html: game.html, change: prompt, signal, ...liveCallbacks(ticker) });
+    const assets = await loadArt(game.id);
+    const changed = await editGame({ apiKey, html: game.html, change: prompt, assets, signal, ...liveCallbacks(ticker) });
     let updated = { ...game, html: changed.html, title: changed.title || game.title, history: [...game.history, prompt] };
     saveGame(updated);
     setPendingBuild(null);
 
-    const tested = await playtestAndFix({ apiKey, html: updated.html, ticker, signal, rounds: 1, from: 70, step: "Checking" });
+    const tested = await playtestAndFix({ apiKey, html: updated.html, assets, ticker, signal, rounds: 1, from: 70, step: "Checking" });
     updated = { ...updated, html: tested.html };
     saveGame(updated);
     renderGallery();
@@ -613,7 +663,7 @@ function renderPublishStatus(game) {
   const check = async () => {
     const token = getGithubToken();
     if (!token) return;
-    Object.assign(state, await checkPublished(game.slug, token, game.html, game.publishedAt));
+    Object.assign(state, await checkPublished(game, token));
     draw();
     if (state.page && state.apk) clearInterval(watchTimer);
   };
@@ -649,6 +699,7 @@ function openSettings({ admin = false } = {}) {
   $("apiKey").value = getApiKey();
   $("workspaceId").value = getWorkspaceId();
   $("githubTokenSettings").value = getGithubToken();
+  $("geminiKey").value = getGeminiKey();
   $("adminPassword").value = $("adminNewPassword").value = "";
   $("adminStatus").hidden = true;
   if (admin) $("adminBox").open = true;
@@ -659,6 +710,7 @@ function applyKeys(keys) {
   setApiKey(keys.anthropicKey || "");
   setWorkspaceId(keys.workspaceId || "");
   if (keys.githubToken) setGithubToken(keys.githubToken);
+  setGeminiKey(keys.geminiKey || "");
 }
 
 // Encrypt the keys with the app password and commit them, so every device gets them.
@@ -686,6 +738,7 @@ async function saveSharedKeys() {
       anthropicKey: $("apiKey").value.trim(),
       workspaceId: $("workspaceId").value.trim(),
       githubToken: token,
+      geminiKey: $("geminiKey").value.trim(),
       updatedAt: new Date().toISOString(),
     };
     const { file, rememberedKey } = await sealVault(newPassword || password, keys, newPassword ? null : current.salt);
