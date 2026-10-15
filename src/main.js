@@ -785,8 +785,12 @@ async function checkForUpdate() {
 }
 
 $("updateBanner").addEventListener("click", async () => {
+  $("updateBanner").textContent = "Updating…";
   const reg = await navigator.serviceWorker?.getRegistration();
   await reg?.update().catch(() => {});
+  // The phone's own cache can keep serving the old files for a while after a deploy,
+  // so fetch fresh copies before reloading.
+  await Promise.all(["./", "index.html", "app.js", "styles.css"].map((f) => fetch(f, { cache: "reload" }).catch(() => {})));
   location.reload();
 });
 document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && checkForUpdate());
