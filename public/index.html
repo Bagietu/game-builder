@@ -66,6 +66,7 @@
         <pre class="live-thinking">Warming up the brain…</pre>
         <div class="live-label live-code-label">⌨️ Your game, being written</div>
         <pre class="live-code"></pre>
+        <div class="live-art" hidden></div>
         <div class="live-test" hidden>
           <div class="live-label">🤖 Robot playtester at work</div>
           <iframe class="live-frame" title="Playtest" sandbox="allow-scripts"></iframe>
@@ -106,6 +107,7 @@
         <pre class="live-thinking">Warming up the brain…</pre>
         <div class="live-label live-code-label">⌨️ Your game, being written</div>
         <pre class="live-code"></pre>
+        <div class="live-art" hidden></div>
         <div class="live-test" hidden>
           <div class="live-label">🤖 Robot playtester at work</div>
           <iframe class="live-frame" title="Playtest" sandbox="allow-scripts"></iframe>
@@ -167,6 +169,9 @@
         <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…" />
         <label for="workspaceId" class="label">Workspace ID <span class="muted">(only if asked)</span></label>
         <input id="workspaceId" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="wrkspc_…" />
+        <label for="geminiKey" class="label">Gemini API key <span class="muted">(optional, for game art)</span></label>
+        <input id="geminiKey" type="password" autocomplete="off" placeholder="AIza…" />
+        <p class="muted small">With this, Gemini draws the characters and backgrounds. Get one at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a>.</p>
         <label for="githubTokenSettings" class="label">GitHub token <span class="muted">(Contents: read and write)</span></label>
         <input id="githubTokenSettings" type="password" autocomplete="off" placeholder="github_pat_…" />
         <p class="muted small">Needed to save these keys, and for making games into apps.</p>
