@@ -56,13 +56,26 @@ const PROFESSOR_SCHEMA = {
 export class GenerationError extends Error {}
 
 // Keys that aren't tied to one workspace must name the workspace on every request.
-function makeClient(apiKey) {
+function makeClient(apiKey, onBytes) {
   const workspaceId = getWorkspaceId();
   return new Anthropic({
     apiKey,
     dangerouslyAllowBrowser: true,
     defaultHeaders: workspaceId ? { "anthropic-workspace-id": workspaceId } : undefined,
+    // Tap the raw response so keep-alive pings (which the SDK hides) count as signs of life.
+    fetch: onBytes ? (url, init) => fetch(url, init).then((res) => tapBody(res, onBytes)) : undefined,
   });
+}
+
+function tapBody(res, onBytes) {
+  if (!res.body) return res;
+  const tap = new TransformStream({
+    transform(chunk, controller) {
+      onBytes();
+      controller.enqueue(chunk);
+    },
+  });
+  return new Response(res.body.pipeThrough(tap), { status: res.status, statusText: res.statusText, headers: res.headers });
 }
 
 /**
@@ -117,8 +130,6 @@ export async function professorTurn({ apiKey, idea, answers, signal }) {
  * `onProgress(chars)` is called as the HTML streams in.
  */
 export async function generateGame({ apiKey, prompt, currentHtml, signal, onProgress, onRetry }) {
-  const client = makeClient(apiKey);
-
   const userContent = currentHtml
     ? `Here is the current game:\n\n${currentHtml}\n\nChange it like this: ${prompt}\n\nReturn the full updated HTML document.`
     : `Make this game: ${prompt}`;
@@ -128,7 +139,7 @@ export async function generateGame({ apiKey, prompt, currentHtml, signal, onProg
   let message;
   for (let attempt = 0; ; attempt++) {
     try {
-      message = await streamOnce(client, userContent, signal, onProgress);
+      message = await streamOnce(apiKey, userContent, signal, onProgress);
       break;
     } catch (err) {
       if (!isDroppedConnection(err) || signal?.aborted || attempt >= MAX_RETRIES) {
@@ -173,32 +184,65 @@ function extractTitle(html) {
   return match ? match[1].trim() : "";
 }
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 4;
 
-async function streamOnce(client, userContent, signal, onProgress) {
-  const stream = client.beta.messages.stream(
-    {
-      model: MODEL,
-      max_tokens: 64000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      output_config: { effort: "medium" },
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userContent }],
-    },
-    { signal },
-  );
-  let received = 0;
-  onProgress?.(0);
-  stream.on("text", (delta) => {
-    received += delta.length;
-    onProgress?.(received);
-  });
-  return stream.finalMessage();
+// The API sends a keep-alive ping every few seconds, so this much silence means
+// the connection died without telling us (common after a phone's screen sleeps).
+const STALL_MS = 45_000;
+
+class StallError extends Error {}
+
+async function streamOnce(apiKey, userContent, signal, onProgress) {
+  const attempt = new AbortController();
+  const stopAttempt = () => attempt.abort();
+  signal?.addEventListener("abort", stopAttempt);
+  let lastByte = Date.now();
+  let stalled = false;
+  const checkStall = () => {
+    if (Date.now() - lastByte > STALL_MS) {
+      stalled = true;
+      attempt.abort();
+    }
+  };
+  const watchdog = setInterval(checkStall, 5000);
+  // Timers freeze while the screen is off, so check the moment the app comes back.
+  const onVisible = () => document.visibilityState === "visible" && checkStall();
+  document.addEventListener("visibilitychange", onVisible);
+
+  try {
+    const client = makeClient(apiKey, () => (lastByte = Date.now()));
+    const stream = client.beta.messages.stream(
+      {
+        model: MODEL,
+        max_tokens: 64000,
+        betas: ["server-side-fallback-2026-07-01"],
+        fallbacks: "default",
+        output_config: { effort: "medium" },
+        system: SYSTEM_PROMPT,
+        messages: [{ role: "user", content: userContent }],
+      },
+      { signal: attempt.signal, maxRetries: 0 },
+    );
+    let received = 0;
+    onProgress?.(0);
+    stream.on("text", (delta) => {
+      received += delta.length;
+      onProgress?.(received);
+    });
+    return await stream.finalMessage();
+  } catch (err) {
+    if (stalled && !signal?.aborted) throw new StallError("no answer from the API for a while");
+    throw err;
+  } finally {
+    clearInterval(watchdog);
+    document.removeEventListener("visibilitychange", onVisible);
+    signal?.removeEventListener("abort", stopAttempt);
+  }
 }
 
 /** The connection broke (as opposed to the API saying no). */
 function isDroppedConnection(err) {
+  if (err instanceof StallError) return true;
   if (err instanceof Anthropic.APIUserAbortError) return false;
   if (err instanceof Anthropic.APIConnectionError) return true;
   if (err instanceof Anthropic.APIError) return [500, 502, 503, 504, 529].includes(err.status) || err.status == null;
