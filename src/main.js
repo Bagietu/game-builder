@@ -194,7 +194,7 @@ function composePrompt(idea, answers) {
 }
 
 // Step 2: build the game from the idea plus the player's answers.
-async function build(idea, answers) {
+async function build(idea, answers, saved = null) {
   interview = null;
   $("resumeBox").hidden = true;
   $("quiz").hidden = true;
@@ -213,20 +213,28 @@ async function build(idea, answers) {
   const callbacks = liveCallbacks(ticker, () =>
     prof.set("The connection fizzled! Rewiring the doohickey and starting over…", "working"),
   );
-  // Remembered until the build ends, so a page reload mid-build can offer to redo it.
-  setPendingBuild({ kind: "build", idea, answers, at: Date.now() });
+  // Every finished step (and the code written so far) is saved as it happens, so a build
+  // that dies (page reload, lost connection, out of credits) can continue where it stopped.
+  const job = saved ?? { kind: "build", idea, answers, id: crypto.randomUUID() };
+  const keep = (patch) => setPendingBuild(Object.assign(job, patch, { at: Date.now() }));
+  keep({ error: undefined });
+  let lastSave = 0;
   try {
     const geminiKey = getGeminiKey();
     const steps = geminiKey ? 4 : 3;
     let step = 1;
     const label = (name) => `Step ${step++}/${steps} · ${name}`;
-    const id = crypto.randomUUID();
+    const id = job.id;
 
     ticker.stage(label("Planning"), 0, 8, 1500, "📝 Game plan");
-    const plan = await planGame({ apiKey, prompt, signal, ...callbacks });
+    if (job.plan) ticker.update(job.plan.length, job.plan);
+    else keep({ plan: await planGame({ apiKey, prompt, signal, ...callbacks }) });
+    const { plan } = job;
 
     let assets = {};
-    if (geminiKey) {
+    if (job.artDone) {
+      assets = (await loadArt(id)) || {};
+    } else if (geminiKey) {
       ticker.stage(label("Drawing art"), 8, 20, 0, null, { art: true });
       prof.set("Summoning my artist friend from the Gemini dimension…", "working");
       try {
@@ -239,11 +247,26 @@ async function build(idea, answers) {
         assets = {};
         prof.set(`The artist fainted (${err.message}). I'll draw everything myself!`, "working");
       }
+      keep({ artDone: true });
     }
+    if (job.artDone && step === 2 && geminiKey) step++; // art came from the saved build
 
     const buildFrom = geminiKey ? 20 : 8;
     ticker.stage(label("Building"), buildFrom, 82, 40_000, "⌨️ Your game, being written");
-    const built = await generateGame({ apiKey, prompt, plan, assets, signal, ...callbacks });
+    if (job.partial) prof.set("Picking up right where my pen stopped!", "working");
+    const built = await generateGame({
+      apiKey,
+      prompt,
+      plan,
+      assets,
+      signal,
+      resume: job.partial,
+      ...callbacks,
+      onPartial: (text) => {
+        job.partial = text;
+        if (Date.now() - lastSave > 2000) (lastSave = Date.now()), keep({});
+      },
+    });
     let game = { id, title: built.title || summary, prompt, plan, html: built.html, history: [summary] };
     saveGame(game); // keep the paid-for build even if the page goes away during testing
     setPendingBuild(null);
@@ -264,10 +287,16 @@ async function build(idea, answers) {
     openPlayer(game);
   } catch (err) {
     clearInterval(quips);
-    prof.set("Kaboom. That wasn't supposed to happen. Shall we try again?", "idle");
-    showError($("error"), err);
+    if (signal.aborted || !getPendingBuild()) {
+      setPendingBuild(null);
+      if (job.artDone && !listGames().some((g) => g.id === job.id)) deleteArt(job.id);
+      prof.set("Kaboom. That wasn't supposed to happen. Shall we try again?", "idle");
+      showError($("error"), err);
+    } else {
+      keep({ error: err?.message || String(err) });
+      offerResume();
+    }
   } finally {
-    setPendingBuild(null);
     clearInterval(quips);
     ticker.stop();
     abort = null;
@@ -783,33 +812,46 @@ document.addEventListener("visibilitychange", () => document.visibilityState ===
 
 // ---------- Interrupted builds ----------
 
-/** If the page reloaded mid-build (phone asleep, app killed), offer to run it again. */
+/** What a saved build already has, in words. */
+function savedParts(job) {
+  const parts = [job.plan && "the plan", job.artDone && "the art", job.partial && `${Math.round(job.partial.length / 1000)}k characters of code`];
+  const have = parts.filter(Boolean);
+  return have.length ? `Saved so far: ${have.join(", ")}.` : "All your answers are saved.";
+}
+
+/** A build or change that stopped (page reload, lost connection, out of credits): offer to carry on. */
 function offerResume() {
   const job = getPendingBuild();
   if (!job) return;
   const game = job.kind === "tweak" ? listGames().find((g) => g.id === job.gameId) : null;
   if (job.kind === "tweak" && !game) return setPendingBuild(null);
+  const failed = Boolean(job.error);
+  const why = failed ? `stopped: ${job.error.replace(/\.$/, "")}` : "got interrupted when the page reloaded";
   $("resumeText").textContent =
     job.kind === "tweak"
-      ? `Your change to "${game.title}" got interrupted when the page reloaded.`
-      : `Your last game ("${job.idea || "surprise game"}") got interrupted when the page reloaded. All your answers are saved.`;
+      ? `Your change to "${game.title}" ${why}.`
+      : `Your game ("${job.idea || "surprise game"}") ${why}. ${savedParts(job)} Tap Continue to pick up from there.`;
+  $("resumeBtn").textContent = job.kind === "tweak" ? "Try again 🔁" : "Continue building ▶️";
   $("resumeBox").hidden = false;
-  prof.say("Blast! Someone pulled the plug mid-experiment. Shall I start it again?", { mood: "thinking" });
+  if (!failed) prof.say("Blast! Someone pulled the plug mid-experiment. Shall I carry on?", { mood: "thinking" });
+  else prof.say("Kaboom! But I saved my notes. We can carry on whenever you're ready.", { mood: "thinking" });
   $("resumeBtn").onclick = async () => {
     $("resumeBox").hidden = true;
-    setPendingBuild(null);
-      if (job.kind === "tweak") {
+    $("error").hidden = true;
+    if (job.kind === "tweak") {
+      setPendingBuild(null);
       openPlayer(game);
       $("tweakPanel").hidden = false;
       $("tweakPrompt").value = job.prompt;
       tweak();
     } else {
-      build(job.idea, job.answers);
+      build(job.idea, job.answers, job);
     }
   };
   $("resumeDismiss").onclick = () => {
     $("resumeBox").hidden = true;
     setPendingBuild(null);
+    if (job.id && !listGames().some((g) => g.id === job.id)) deleteArt(job.id);
   };
 }
 

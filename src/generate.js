@@ -171,18 +171,53 @@ async function professorWithClaude(apiKey, user, signal) {
 }
 
 /** Run one streamed request, starting over if the phone drops the connection. */
-async function streamWithRetries(apiKey, request, { signal, onProgress, onThinking, onRetry }) {
+// Below this much text, starting over is cheaper than asking Claude to pick up mid-file.
+const MIN_RESUME = 1500;
+
+/** Ask Claude to carry on a document that got cut off, instead of writing it again. */
+function continuation(content, soFar) {
+  return `${content}\n\nYou already started writing your reply and got cut off. Everything written so far is between the markers below.\n<<<WRITTEN SO FAR>>>\n${soFar}\n<<<END>>>\n\nContinue from exactly where it stops: reply with only the rest, starting with the very next characters. Do not repeat anything already written and add no explanation.`;
+}
+
+/** Join a cut-off text and its continuation, dropping any overlap Claude repeated. */
+export function stitch(soFar, rest) {
+  if (/^\s*(```\w*\s*)?<!DOCTYPE/i.test(rest)) return rest; // it started over from the top
+  rest = rest.replace(/^```\w*\n/, "");
+  for (let n = Math.min(400, soFar.length, rest.length); n >= 20; n--) {
+    if (soFar.endsWith(rest.slice(0, n))) return soFar + rest.slice(n);
+  }
+  return soFar + rest;
+}
+
+/**
+ * Run one streamed request, retrying if the phone drops the connection.
+ * With `request.resumable`, a retry continues from the text already written (and from
+ * `request.resume`, text saved by an earlier attempt) instead of starting over.
+ * `onPartial` gets everything written so far, for saving.
+ */
+async function streamWithRetries(apiKey, request, { signal, onProgress, onThinking, onRetry, onPartial }) {
+  let kept = request.resumable ? request.resume || "" : "";
   for (let attempt = 0; ; attempt++) {
+    const prefix = kept.length >= MIN_RESUME ? kept : "";
+    const req = prefix ? { ...request, content: continuation(request.content, prefix) } : request;
+    let latest = "";
+    const progress = (n, text) => {
+      latest = text;
+      onProgress?.(prefix.length + n, prefix + text);
+      onPartial?.(prefix + text);
+    };
     try {
-      const message = await streamOnce(apiKey, request, signal, onProgress, onThinking);
+      const message = await streamOnce(apiKey, req, signal, progress, onThinking);
       if (message.stop_reason === "refusal") {
         throw new GenerationError("Claude declined to make this one. Try describing the game differently.");
       }
-      return {
-        message,
-        text: message.content.filter((b) => b.type === "text").map((b) => b.text).join(""),
-      };
+      const text = message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+      return { message, text: prefix ? stitch(prefix, text) : text };
     } catch (err) {
+      if (request.resumable && latest) {
+        kept = prefix ? stitch(prefix, latest) : latest;
+        onPartial?.(kept);
+      }
       if (err instanceof GenerationError) throw err;
       if (!isDroppedConnection(err) || signal?.aborted || attempt >= MAX_RETRIES) {
         throw new GenerationError(describeApiError(err));
@@ -280,12 +315,12 @@ export function artNote(assets) {
 }
 
 /** Step 2: build the whole game from the brief and plan. */
-export async function generateGame({ apiKey, prompt, plan, assets, ...callbacks }) {
+export async function generateGame({ apiKey, prompt, plan, assets, resume, ...callbacks }) {
   const art = artNote(assets);
   const content = [`Player's brief:\n${prompt}`, plan && `Design plan:\n${plan}`, art].filter(Boolean).join("\n\n");
   const { message, text } = await streamWithRetries(
     apiKey,
-    { system: BUILD_PROMPT, effort: "high", maxTokens: 128000, content },
+    { system: BUILD_PROMPT, effort: "high", maxTokens: 128000, content, resumable: true, resume },
     callbacks,
   );
   const html = extractHtml(text);
