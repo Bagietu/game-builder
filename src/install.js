@@ -1,6 +1,8 @@
 // Keeping a game: save it as a file, or publish it to the repo so GitHub
 // builds it into its own installable app (home-screen icon + APK).
 
+import { withPhaser } from "./playtest.js";
+
 const REPO = "Bagietu/game-builder";
 const SITE = "https://bagietu.github.io/game-builder";
 
@@ -25,7 +27,7 @@ export const gameLinks = (slug) => ({
 /** Share the game as an .html file (Android share sheet), or download it. */
 export async function saveAsFile(game) {
   const name = `${slugFor(game)}.html`;
-  const file = new File([game.html], name, { type: "text/html" });
+  const file = new File([await withPhaser(game.html)], name, { type: "text/html" });
   if (navigator.canShare?.({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title: game.title });
@@ -79,7 +81,7 @@ export async function publishGame(game, token) {
     method: "PUT",
     body: JSON.stringify({
       message: `Add game: ${game.title}`,
-      content: toBase64(game.html),
+      content: toBase64(await withPhaser(game.html)),
       branch: "main",
       ...(sha && { sha }),
     }),
@@ -96,6 +98,7 @@ export async function publishGame(game, token) {
 
 /** Which parts of this exact version are live yet: { page, apk }. `since` is when it was published. */
 export async function checkPublished(slug, token, html, since) {
+  html = await withPhaser(html);
   const [page, apk] = await Promise.all([
     fetch(`${SITE}/games/${slug}/game.html`, { cache: "no-store" })
       .then((r) => (r.ok ? r.text() : ""))

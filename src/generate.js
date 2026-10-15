@@ -3,20 +3,43 @@ import { getWorkspaceId } from "./storage.js";
 
 const MODEL = "claude-opus-5-5";
 
-const SYSTEM_PROMPT = `You are the engine inside "Game Builder", an app where players create small games by describing them.
+/** The app hosts its own copy of Phaser; games reference it with exactly this tag. */
+export const PHASER_URL = "https://bagietu.github.io/game-builder/vendor/phaser.min.js";
+export const PHASER_TAG = `<script src="${PHASER_URL}"></script>`;
 
-Write one complete, self-contained HTML5 game as a single HTML document.
+const GAME_RULES = `Technical rules:
+- One complete HTML document. Use Phaser 3.90 as the game engine, loaded with exactly this tag in <head>: ${PHASER_TAG}
+  No other external files, libraries, fonts, images or network requests. Make all graphics in code: Phaser Graphics + generateTexture, shapes, gradients, emoji or text, particle emitters.
+- It runs in a sandboxed iframe on a phone. Fill the viewport (Phaser Scale.RESIZE or FIT with autoCenter), handle resize, and make it fully playable by touch: on-screen buttons, taps, drags or swipes sized for thumbs. Support keyboard as well when it fits.
+- Prevent page scrolling and zooming (touch-action: none, margin 0, overflow hidden).
+- Do not use localStorage, sessionStorage, cookies, alert, confirm, prompt or window.open; they are blocked. Keep high scores in memory. Sound, if any, via Web Audio started on the first tap.
+- Organise the code in Phaser scenes (e.g. Boot/Title, Game, UI, GameOver) and small classes. Avoid runtime errors: guard against undefined objects, destroy timers and listeners on scene shutdown.
+- Put a short, catchy game name in the <title> tag.`;
 
-Requirements:
-- Everything inline: one <style> and one <script>. No external files, libraries, fonts, images or network requests. Draw graphics with canvas, CSS, SVG or emoji.
-- It runs in a sandboxed iframe on a phone. Fill the viewport (100vw x 100dvh), handle resize, and make it fully playable by touch: on-screen buttons, taps or swipes. Support keyboard as well when it fits.
-- Prevent page scrolling and zooming during play (touch-action: none on the play area, preventDefault on touch events).
-- Do not use localStorage, sessionStorage, cookies, alert, confirm, prompt or window.open; they are blocked in the sandbox. Keep high scores in memory.
-- Start with a short title screen showing how to play, then a tap to start. Include score or progress, a game-over or win state, and a way to play again.
-- Make it fun and polished: juicy feedback, sensible difficulty curve, readable text on small screens.
-- Put a short, catchy game name in the <title> tag.
+const BUILD_PROMPT = `You are the lead developer inside "Game Builder", an app where players create games on their phone by describing them. You get the player's brief and a design plan; build that game in full.
+
+Aim high: this should feel like a real, polished mobile game, not a tech demo. Multiple levels or escalating waves, enemies or obstacles with distinct behaviours, power-ups or upgrades, a clear goal, a title screen that explains the controls, score and progress HUD, game-over and win screens with play-again, juicy feedback (tweens, particles, screen shake, hit flashes) and a fair difficulty curve. Follow the plan, and improve on it where it makes the game more fun.
+
+${GAME_RULES}
 
 Reply with only the HTML document, starting with <!DOCTYPE html> and ending with </html>. No explanation before or after it.`;
+
+const PLAN_PROMPT = `You are the game designer inside "Game Builder", a phone app where players create games by describing them. Turn the player's brief into a tight design plan for a Phaser 3 mobile game that a developer will build in one HTML file with code-drawn graphics.
+
+Cover, as short markdown bullets: game name; core loop; touch controls; the player character and abilities; enemies/obstacles and how each behaves; progression (levels, waves, upgrades, bosses); scoring, win and lose conditions; screens; juice and feel; art direction using shapes, gradients, emoji and particles. Be concrete and ambitious but buildable. Keep it under 350 words. Reply with only the plan.`;
+
+const EDIT_PROMPT = `You are the developer inside "Game Builder", a phone app where players create games. You get an existing game (one HTML file) and a change to make: either the player's request or bugs found by an automatic playtest. Make the change well and keep everything else working.
+
+${GAME_RULES}
+
+Reply with edits in this exact format, as many blocks as needed, and nothing else:
+<<<<<<< SEARCH
+(exact lines copied from the current file, enough to be unique)
+=======
+(the replacement lines)
+>>>>>>> REPLACE
+
+Each SEARCH must match the current file exactly, including indentation. If the change touches most of the file, reply instead with the full new HTML document, starting with <!DOCTYPE html> and ending with </html>.`;
 
 const PROFESSOR_PROMPT = `You are Professor Pixelwhisk, the wildly eccentric (and slightly unhinged) mad scientist of game design inside "Game Builder", a phone app where players invent small games.
 
@@ -125,23 +148,20 @@ export async function professorTurn({ apiKey, idea, answers, signal }) {
   }
 }
 
-/**
- * Ask Claude for a game. Pass `currentHtml` to change an existing game.
- * `onProgress(chars)` is called as the HTML streams in.
- */
-export async function generateGame({ apiKey, prompt, currentHtml, signal, onProgress, onThinking, onRetry }) {
-  const userContent = currentHtml
-    ? `Here is the current game:\n\n${currentHtml}\n\nChange it like this: ${prompt}\n\nReturn the full updated HTML document.`
-    : `Make this game: ${prompt}`;
-
-  // Phones drop long connections (screen off, app switched, network change).
-  // When that happens, wait until the app is visible again and start over.
-  let message;
+/** Run one streamed request, starting over if the phone drops the connection. */
+async function streamWithRetries(apiKey, request, { signal, onProgress, onThinking, onRetry }) {
   for (let attempt = 0; ; attempt++) {
     try {
-      message = await streamOnce(apiKey, userContent, signal, onProgress, onThinking);
-      break;
+      const message = await streamOnce(apiKey, request, signal, onProgress, onThinking);
+      if (message.stop_reason === "refusal") {
+        throw new GenerationError("Claude declined to make this one. Try describing the game differently.");
+      }
+      return {
+        message,
+        text: message.content.filter((b) => b.type === "text").map((b) => b.text).join(""),
+      };
     } catch (err) {
+      if (err instanceof GenerationError) throw err;
       if (!isDroppedConnection(err) || signal?.aborted || attempt >= MAX_RETRIES) {
         throw new GenerationError(describeApiError(err));
       }
@@ -151,16 +171,26 @@ export async function generateGame({ apiKey, prompt, currentHtml, signal, onProg
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
+}
 
-  if (message.stop_reason === "refusal") {
-    throw new GenerationError("Claude declined to make this one. Try describing the game differently.");
-  }
+/** Step 1: a short design plan for the game. */
+export async function planGame({ apiKey, prompt, ...callbacks }) {
+  const { text } = await streamWithRetries(
+    apiKey,
+    { system: PLAN_PROMPT, effort: "low", maxTokens: 8000, content: `Player's brief:\n${prompt}` },
+    callbacks,
+  );
+  return text.trim();
+}
 
-  const text = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("");
-
+/** Step 2: build the whole game from the brief and plan. */
+export async function generateGame({ apiKey, prompt, plan, ...callbacks }) {
+  const content = plan ? `Player's brief:\n${prompt}\n\nDesign plan:\n${plan}` : `Player's brief:\n${prompt}`;
+  const { message, text } = await streamWithRetries(
+    apiKey,
+    { system: BUILD_PROMPT, effort: "high", maxTokens: 128000, content },
+    callbacks,
+  );
   const html = extractHtml(text);
   if (!html) {
     if (message.stop_reason === "max_tokens") {
@@ -168,9 +198,53 @@ export async function generateGame({ apiKey, prompt, currentHtml, signal, onProg
     }
     throw new GenerationError("Claude didn't return a playable game. Try again.");
   }
-
   return { html, title: extractTitle(html) };
 }
+
+/**
+ * Change an existing game: a player's request, or bugs from the playtest.
+ * Claude sends small search/replace edits, so big games stay cheap and fast to change.
+ */
+export async function editGame({ apiKey, html, change, ...callbacks }) {
+  const content = `Current game:\n\n${html}\n\nChange to make:\n${change}`;
+  const { message, text } = await streamWithRetries(
+    apiKey,
+    { system: EDIT_PROMPT, effort: "medium", maxTokens: 128000, content },
+    callbacks,
+  );
+  const full = extractHtml(text);
+  if (full && !text.includes("<<<<<<< SEARCH")) return { html: full, title: extractTitle(full) };
+
+  const edited = applyEdits(html, text);
+  if (!edited) {
+    if (message.stop_reason === "max_tokens") throw new GenerationError("The change got too big and was cut off. Try a smaller change.");
+    throw new GenerationError("Claude's changes didn't fit the game's code. Try again.");
+  }
+  return { html: edited, title: extractTitle(edited) };
+}
+
+/** Apply SEARCH/REPLACE blocks. Returns null if there are none or one doesn't match. */
+export function applyEdits(html, text) {
+  const blocks = [...text.matchAll(/<<<<<<< SEARCH\n([\s\S]*?)\n?=======\n([\s\S]*?)\n?>>>>>>> REPLACE/g)];
+  if (!blocks.length) return null;
+  let out = html;
+  for (const [, search, replace] of blocks) {
+    let at = out.indexOf(search);
+    let find = search;
+    if (at === -1) {
+      // Forgive differences in trailing whitespace on each line.
+      const loose = new RegExp(search.split("\n").map((l) => escapeRegExp(l.trimEnd()) + "[ \\t]*").join("\\n"));
+      const m = out.match(loose);
+      if (!m) return null;
+      at = m.index;
+      find = m[0];
+    }
+    out = out.slice(0, at) + replace + out.slice(at + find.length);
+  }
+  return out;
+}
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function extractHtml(text) {
   const start = text.search(/<!doctype html|<html[\s>]/i);
@@ -192,7 +266,7 @@ const STALL_MS = 45_000;
 
 class StallError extends Error {}
 
-async function streamOnce(apiKey, userContent, signal, onProgress, onThinking) {
+async function streamOnce(apiKey, request, signal, onProgress, onThinking) {
   const attempt = new AbortController();
   const stopAttempt = () => attempt.abort();
   signal?.addEventListener("abort", stopAttempt);
@@ -214,13 +288,13 @@ async function streamOnce(apiKey, userContent, signal, onProgress, onThinking) {
     const stream = client.beta.messages.stream(
       {
         model: MODEL,
-        max_tokens: 64000,
+        max_tokens: request.maxTokens,
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
         thinking: { type: "adaptive", display: "summarized" },
-        output_config: { effort: "medium" },
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userContent }],
+        output_config: { effort: request.effort },
+        system: request.system,
+        messages: [{ role: "user", content: request.content }],
       },
       { signal: attempt.signal, maxRetries: 0 },
     );

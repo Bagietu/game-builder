@@ -10,7 +10,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "0.133.0",
     "@capacitor/app": "8.1.2",
-    "@capacitor/core": "8.5.3"
+    "@capacitor/core": "8.5.3",
+    "phaser": "3.90.0"
   },
   "devDependencies": {
     "@capacitor/android": "8.5.3",
