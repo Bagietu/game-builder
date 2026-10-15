@@ -223,6 +223,7 @@ async function build(idea, answers) {
       prompt,
       signal: abort.signal,
       onProgress: (n) => ($("progressText").textContent = progressLabel(n)),
+      onRetry: () => prof.set("The connection fizzled! Rewiring the doohickey and starting over…", "working"),
     });
     const game = { id: crypto.randomUUID(), title: title || summary, prompt, html, history: [summary] };
     saveGame(game);
@@ -252,7 +253,26 @@ function progressLabel(chars) {
   return chars === 0 ? "Designing your game…" : `Writing code… ${Math.round(chars / 1000)}k characters`;
 }
 
+// Keep the screen on while building: phones cut the connection when it sleeps.
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && !wakeLock && "wakeLock" in navigator && document.visibilityState === "visible") {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => (wakeLock = null));
+    } else if (!on && wakeLock) {
+      await wakeLock.release();
+    }
+  } catch {
+    wakeLock = null;
+  }
+}
+document.addEventListener("visibilitychange", () => {
+  if (abort && document.visibilityState === "visible") keepAwake(true);
+});
+
 function setBusy(busy, button, progress, error) {
+  keepAwake(busy);
   button.disabled = busy;
   progress.hidden = !busy;
   if (busy) {
@@ -346,6 +366,7 @@ async function tweak() {
       currentHtml: game.html,
       signal: abort.signal,
       onProgress: (n) => ($("tweakProgressText").textContent = progressLabel(n)),
+      onRetry: () => ($("tweakProgressText").textContent = "Connection dropped, starting over…"),
     });
     const updated = { ...game, html, title: title || game.title, history: [...game.history, prompt] };
     saveGame(updated);

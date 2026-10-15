@@ -116,37 +116,29 @@ export async function professorTurn({ apiKey, idea, answers, signal }) {
  * Ask Claude for a game. Pass `currentHtml` to change an existing game.
  * `onProgress(chars)` is called as the HTML streams in.
  */
-export async function generateGame({ apiKey, prompt, currentHtml, signal, onProgress }) {
+export async function generateGame({ apiKey, prompt, currentHtml, signal, onProgress, onRetry }) {
   const client = makeClient(apiKey);
 
   const userContent = currentHtml
     ? `Here is the current game:\n\n${currentHtml}\n\nChange it like this: ${prompt}\n\nReturn the full updated HTML document.`
     : `Make this game: ${prompt}`;
 
-  const stream = client.beta.messages.stream(
-    {
-      model: MODEL,
-      max_tokens: 64000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      output_config: { effort: "medium" },
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userContent }],
-    },
-    { signal },
-  );
-
-  let received = 0;
-  stream.on("text", (delta) => {
-    received += delta.length;
-    onProgress?.(received);
-  });
-
+  // Phones drop long connections (screen off, app switched, network change).
+  // When that happens, wait until the app is visible again and start over.
   let message;
-  try {
-    message = await stream.finalMessage();
-  } catch (err) {
-    throw new GenerationError(describeApiError(err));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      message = await streamOnce(client, userContent, signal, onProgress);
+      break;
+    } catch (err) {
+      if (!isDroppedConnection(err) || signal?.aborted || attempt >= MAX_RETRIES) {
+        throw new GenerationError(describeApiError(err));
+      }
+      await whenVisible(signal);
+      if (signal?.aborted) throw new GenerationError("Cancelled.");
+      onRetry?.(attempt + 1);
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   }
 
   if (message.stop_reason === "refusal") {
@@ -181,6 +173,52 @@ function extractTitle(html) {
   return match ? match[1].trim() : "";
 }
 
+const MAX_RETRIES = 3;
+
+async function streamOnce(client, userContent, signal, onProgress) {
+  const stream = client.beta.messages.stream(
+    {
+      model: MODEL,
+      max_tokens: 64000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      output_config: { effort: "medium" },
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userContent }],
+    },
+    { signal },
+  );
+  let received = 0;
+  onProgress?.(0);
+  stream.on("text", (delta) => {
+    received += delta.length;
+    onProgress?.(received);
+  });
+  return stream.finalMessage();
+}
+
+/** The connection broke (as opposed to the API saying no). */
+function isDroppedConnection(err) {
+  if (err instanceof Anthropic.APIUserAbortError) return false;
+  if (err instanceof Anthropic.APIConnectionError) return true;
+  if (err instanceof Anthropic.APIError) return [500, 502, 503, 504, 529].includes(err.status) || err.status == null;
+  return /network|fetch|load failed|terminated|aborted|connection|stream ended/i.test(String(err?.message ?? err));
+}
+
+function whenVisible(signal) {
+  if (typeof document === "undefined" || document.visibilityState === "visible") return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      if (document.visibilityState !== "visible" && !signal?.aborted) return;
+      document.removeEventListener("visibilitychange", done);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    document.addEventListener("visibilitychange", done);
+    signal?.addEventListener("abort", done);
+  });
+}
+
 function describeApiError(err) {
   if (err instanceof Anthropic.APIUserAbortError) return "Cancelled.";
   if (err instanceof Anthropic.AuthenticationError) return "Your API key was rejected. Check it in Settings.";
@@ -195,6 +233,9 @@ function describeApiError(err) {
       return "Your Anthropic account is out of credits.";
     }
     return `API error${err.status ? ` (${err.status})` : ""}: ${err.message}`;
+  }
+  if (isDroppedConnection(err)) {
+    return `The connection dropped while building (${err?.message || err}). Keep the app open with the screen on, then try again.`;
   }
   return err?.message || String(err);
 }
