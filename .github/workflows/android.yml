@@ -3,9 +3,9 @@ name: Build Android app
 on:
   push:
     branches: [main]
-    paths-ignore: ["games/**"]
+    paths-ignore: ["games/**", "public/keys.enc.json"]
   pull_request:
-    paths-ignore: ["games/**"]
+    paths-ignore: ["games/**", "public/keys.enc.json"]
   workflow_dispatch:
 
 permissions:

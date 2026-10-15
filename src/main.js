@@ -1,7 +1,8 @@
 import { professorTurn, planGame, generateGame, editGame, GenerationError } from "./generate.js";
 import { playtest, withPhaser } from "./playtest.js";
-import { ensureUnlocked } from "./lock.js";
-import { saveAsFile, publishGame, checkPublished, gameLinks } from "./install.js";
+import { unlockApp, adoptVault } from "./lock.js";
+import { fetchVault, openVault, sealVault } from "./vault.js";
+import { saveAsFile, publishGame, checkPublished, gameLinks, commitFile } from "./install.js";
 import { Professor, GREETINGS, THINKING_LINES, BUILD_LINES, pick } from "./professor.js";
 import { getApiKey, setApiKey, getWorkspaceId, setWorkspaceId, getGithubToken, setGithubToken, getPendingBuild, setPendingBuild, listGames, saveGame, deleteGame } from "./storage.js";
 
@@ -40,7 +41,10 @@ function renderIdeas() {
 
 function requireKey() {
   const key = getApiKey();
-  if (!key) openSettings();
+  if (!key) {
+    prof.say("My machine has no fuel! The admin needs to add an API key in ⚙️ Settings.", { mood: "thinking" });
+    openSettings({ admin: true });
+  }
   return key;
 }
 
@@ -48,7 +52,6 @@ function requireKey() {
 let interview = null;
 
 async function start() {
-  if (!(await ensureUnlocked())) return;
   const apiKey = requireKey();
   if (!apiKey) return;
   $("error").hidden = true;
@@ -489,7 +492,6 @@ function closePlayer() {
 async function tweak() {
   const prompt = $("tweakPrompt").value.trim();
   if (!prompt || !currentGame) return;
-  if (!(await ensureUnlocked())) return;
   const apiKey = requireKey();
   if (!apiKey) return;
 
@@ -549,7 +551,6 @@ function closeKeep() {
 async function publishCurrent() {
   const game = currentGame;
   if (!game) return;
-  if (!(await ensureUnlocked())) return;
   const token = getGithubToken();
   if (!token) {
     $("tokenBox").hidden = false;
@@ -644,21 +645,69 @@ $("tokenSaveBtn").addEventListener("click", () => {
 
 // ---------- Settings ----------
 
-function openSettings() {
+function openSettings({ admin = false } = {}) {
   $("apiKey").value = getApiKey();
   $("workspaceId").value = getWorkspaceId();
   $("githubTokenSettings").value = getGithubToken();
+  $("adminPassword").value = $("adminNewPassword").value = "";
+  $("adminStatus").hidden = true;
+  if (admin) $("adminBox").open = true;
   $("settings").showModal();
 }
 
-$("cancelSettings").addEventListener("click", () => $("settings").close("cancel"));
-$("settings").addEventListener("close", () => {
-  if ($("settings").returnValue === "save") {
-    setApiKey($("apiKey").value.trim());
-    setWorkspaceId($("workspaceId").value.trim());
-    setGithubToken($("githubTokenSettings").value.trim());
+function applyKeys(keys) {
+  setApiKey(keys.anthropicKey || "");
+  setWorkspaceId(keys.workspaceId || "");
+  if (keys.githubToken) setGithubToken(keys.githubToken);
+}
+
+// Encrypt the keys with the app password and commit them, so every device gets them.
+async function saveSharedKeys() {
+  const status = $("adminStatus");
+  const say = (text, ok = false) => {
+    status.textContent = text;
+    status.className = `small ${ok ? "ok" : "error"}`;
+    status.hidden = false;
+  };
+  const password = $("adminPassword").value.trim();
+  const newPassword = $("adminNewPassword").value.trim();
+  const token = $("githubTokenSettings").value.trim();
+  if (!password) return say("Enter the app password to save.");
+  if (!token) return say("A GitHub token is needed to save keys for all devices.");
+
+  $("adminSave").disabled = true;
+  try {
+    say("Checking the password…", true);
+    const current = await fetchVault();
+    await openVault(current, password).catch(() => {
+      throw new Error("Wrong app password.");
+    });
+    const keys = {
+      anthropicKey: $("apiKey").value.trim(),
+      workspaceId: $("workspaceId").value.trim(),
+      githubToken: token,
+      updatedAt: new Date().toISOString(),
+    };
+    const { file, rememberedKey } = await sealVault(newPassword || password, keys, newPassword ? null : current.salt);
+    say("Saving to GitHub…", true);
+    await commitFile(token, "public/keys.enc.json", JSON.stringify(file, null, 2) + "\n", "Update shared keys");
+    adoptVault(file, rememberedKey);
+    applyKeys(keys);
+    say(
+      newPassword
+        ? "Saved, with the new password. Other devices get the keys in about 2 minutes and will ask for the new password."
+        : "Saved. Other devices get the new keys in about 2 minutes.",
+      true,
+    );
+  } catch (err) {
+    say(err.message || String(err));
+  } finally {
+    $("adminSave").disabled = false;
   }
-});
+}
+
+$("adminSave").addEventListener("click", saveSharedKeys);
+$("cancelSettings").addEventListener("click", () => $("settings").close("cancel"));
 
 // ---------- Version & updates ----------
 
@@ -706,8 +755,7 @@ function offerResume() {
   $("resumeBtn").onclick = async () => {
     $("resumeBox").hidden = true;
     setPendingBuild(null);
-    if (!(await ensureUnlocked())) return;
-    if (job.kind === "tweak") {
+      if (job.kind === "tweak") {
       openPlayer(game);
       $("tweakPanel").hidden = false;
       $("tweakPrompt").value = job.prompt;
@@ -732,7 +780,7 @@ $("prompt").addEventListener("keydown", (e) => {
     start();
   }
 });
-$("settingsBtn").addEventListener("click", openSettings);
+$("settingsBtn").addEventListener("click", () => openSettings());
 $("closePlayer").addEventListener("click", () => {
   closePlayer();
   if (history.state?.player) history.back();
@@ -749,9 +797,13 @@ renderIdeas();
 renderGallery();
 showVersion();
 checkForUpdate();
-prof.say(pick(GREETINGS));
-if (!getApiKey()) openSettings();
-offerResume();
+unlockApp().then((keys) => {
+  applyKeys(keys);
+  document.body.classList.remove("locked");
+  if (getApiKey()) prof.say(pick(GREETINGS));
+  else prof.say("Welcome! Before I can build anything, the admin must add an API key in ⚙️ Settings.", { mood: "thinking" });
+  offerResume();
+});
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").catch(() => {});

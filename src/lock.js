@@ -1,59 +1,90 @@
-// A simple password gate in front of building. The site is static, so this keeps
-// casual visitors from spending your API credits; it is not real security.
-const PASSWORD_SHA256 = "2c4779e28ec964baa2afdeb862be4b9776562866443cfcf22f37950c20ed0af2";
-const UNLOCK_KEY = "gb.unlocked";
+// The whole app sits behind the password. The password decrypts the shared API keys
+// (see vault.js), so it's both the lock and the way every device gets the keys.
+import { fetchVault, openVault, openVaultWithKey } from "./vault.js";
 
-async function sha256(text) {
-  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
+const REMEMBER_KEY = "gb.vaultKey";
+const CACHED_KEY = "gb.vaultCache"; // last vault file, so the app still opens offline
 
-function isUnlocked() {
+const load = (k) => {
   try {
-    return localStorage.getItem(UNLOCK_KEY) === PASSWORD_SHA256;
+    return JSON.parse(localStorage.getItem(k));
   } catch {
-    return false;
+    return null;
   }
+};
+const save = (k, v) => {
+  try {
+    localStorage.setItem(k, JSON.stringify(v));
+  } catch {}
+};
+
+export function rememberKey(rememberedKey) {
+  save(REMEMBER_KEY, rememberedKey);
 }
 
-/** Resolves true once the right password has been entered on this device. */
-export function ensureUnlocked() {
-  if (isUnlocked()) return Promise.resolve(true);
+/** After an admin saves new keys: keep this device unlocked until the new file is deployed. */
+export function adoptVault(file, rememberedKey) {
+  save(CACHED_KEY, file);
+  rememberKey(rememberedKey);
+}
 
+/** Resolves with the shared keys once this device is unlocked. Asks for the password when needed. */
+export async function unlockApp() {
+  let file;
+  try {
+    file = await fetchVault();
+    save(CACHED_KEY, file);
+  } catch {
+    file = load(CACHED_KEY);
+  }
+  const quiet = file && (await openVaultWithKey(file, load(REMEMBER_KEY)));
+  if (quiet) return quiet;
+  return askPassword(file);
+}
+
+function askPassword(file) {
   const dialog = document.getElementById("lock");
   const form = document.getElementById("lockForm");
   const input = document.getElementById("lockInput");
   const error = document.getElementById("lockError");
-  const cancel = document.getElementById("lockCancel");
+  const button = form.querySelector("button");
   input.value = "";
   error.hidden = true;
+  dialog.addEventListener("cancel", (e) => e.preventDefault()); // no way around the lock
   dialog.showModal();
   input.focus();
 
   return new Promise((resolve) => {
-    const finish = (ok) => {
-      form.removeEventListener("submit", onSubmit);
-      dialog.removeEventListener("close", onClose);
-      if (dialog.open) dialog.close();
-      resolve(ok);
-    };
-    const onSubmit = async (e) => {
+    form.onsubmit = async (e) => {
       e.preventDefault();
-      if ((await sha256(input.value.trim())) === PASSWORD_SHA256) {
+      if (!file) {
+        error.textContent = "Can't reach the lab. Connect to the internet and try again.";
+        error.hidden = false;
         try {
-          localStorage.setItem(UNLOCK_KEY, PASSWORD_SHA256);
-        } catch {}
-        return finish(true);
+          file = await fetchVault();
+          save(CACHED_KEY, file);
+        } catch {
+          return;
+        }
       }
-      error.hidden = false;
-      input.select();
-      dialog.classList.remove("shake");
-      void dialog.offsetWidth;
-      dialog.classList.add("shake");
+      button.disabled = true;
+      button.textContent = "Checking…";
+      try {
+        const { payload, rememberedKey } = await openVault(file, input.value.trim());
+        rememberKey(rememberedKey);
+        dialog.close();
+        resolve(payload);
+      } catch {
+        error.textContent = "Wrong password. The professor is unimpressed.";
+        error.hidden = false;
+        input.select();
+        dialog.classList.remove("shake");
+        void dialog.offsetWidth;
+        dialog.classList.add("shake");
+      } finally {
+        button.disabled = false;
+        button.textContent = "Unlock";
+      }
     };
-    const onClose = () => finish(false);
-    cancel.onclick = () => finish(false);
-    form.addEventListener("submit", onSubmit);
-    dialog.addEventListener("close", onClose);
   });
 }

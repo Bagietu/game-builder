@@ -66,11 +66,8 @@ async function github(token, path, init = {}) {
   return res;
 }
 
-/** Commit the game to games/<slug>/game.html. Returns the slug. */
-export async function publishGame(game, token) {
-  const slug = game.slug || slugFor(game);
-  const path = `games/${slug}/game.html`;
-
+/** Create or update one file on main through the GitHub contents API. */
+export async function commitFile(token, path, text, message) {
   // Updating an existing file needs its current sha.
   let sha;
   const existing = await github(token, `contents/${path}?ref=main`);
@@ -79,12 +76,7 @@ export async function publishGame(game, token) {
 
   const res = await github(token, `contents/${path}`, {
     method: "PUT",
-    body: JSON.stringify({
-      message: `Add game: ${game.title}`,
-      content: toBase64(await withPhaser(game.html)),
-      branch: "main",
-      ...(sha && { sha }),
-    }),
+    body: JSON.stringify({ message, content: toBase64(text), branch: "main", ...(sha && { sha }) }),
   });
   if (!res.ok) {
     if (res.status === 401) throw new Error("GitHub rejected the token. Check it in Settings.");
@@ -93,6 +85,12 @@ export async function publishGame(game, token) {
     }
     throw new Error(`GitHub error ${res.status}. Try again in a moment.`);
   }
+}
+
+/** Commit the game to games/<slug>/game.html. Returns the slug. */
+export async function publishGame(game, token) {
+  const slug = game.slug || slugFor(game);
+  await commitFile(token, `games/${slug}/game.html`, await withPhaser(game.html), `Add game: ${game.title}`);
   return slug;
 }
 

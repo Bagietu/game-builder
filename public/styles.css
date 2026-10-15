@@ -316,3 +316,11 @@ dialog.shake { animation: shake-dialog 0.35s; }
 .live-frame { width: 100%; height: 300px; border: 0; border-radius: 10px; background: #000; display: block; pointer-events: none; }
 .tweak .live-frame { height: 160px; }
 .live-stage { color: var(--accent-2); font-weight: 700; font-size: 0.85rem; }
+
+.locked main, .locked .stage, .locked #settingsBtn, .locked #updateBanner { visibility: hidden; }
+.admin { background: var(--card-2); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.admin[open] { padding-bottom: 14px; }
+.admin summary { font-weight: 700; cursor: pointer; }
+.admin > * + * { margin-top: 8px; }
+.admin input { background: var(--card); }
+#adminStatus.ok { color: #6ee7b7; }
