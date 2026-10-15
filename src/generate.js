@@ -129,7 +129,7 @@ export async function professorTurn({ apiKey, idea, answers, signal }) {
  * Ask Claude for a game. Pass `currentHtml` to change an existing game.
  * `onProgress(chars)` is called as the HTML streams in.
  */
-export async function generateGame({ apiKey, prompt, currentHtml, signal, onProgress, onRetry }) {
+export async function generateGame({ apiKey, prompt, currentHtml, signal, onProgress, onThinking, onRetry }) {
   const userContent = currentHtml
     ? `Here is the current game:\n\n${currentHtml}\n\nChange it like this: ${prompt}\n\nReturn the full updated HTML document.`
     : `Make this game: ${prompt}`;
@@ -139,7 +139,7 @@ export async function generateGame({ apiKey, prompt, currentHtml, signal, onProg
   let message;
   for (let attempt = 0; ; attempt++) {
     try {
-      message = await streamOnce(apiKey, userContent, signal, onProgress);
+      message = await streamOnce(apiKey, userContent, signal, onProgress, onThinking);
       break;
     } catch (err) {
       if (!isDroppedConnection(err) || signal?.aborted || attempt >= MAX_RETRIES) {
@@ -192,7 +192,7 @@ const STALL_MS = 45_000;
 
 class StallError extends Error {}
 
-async function streamOnce(apiKey, userContent, signal, onProgress) {
+async function streamOnce(apiKey, userContent, signal, onProgress, onThinking) {
   const attempt = new AbortController();
   const stopAttempt = () => attempt.abort();
   signal?.addEventListener("abort", stopAttempt);
@@ -217,17 +217,24 @@ async function streamOnce(apiKey, userContent, signal, onProgress) {
         max_tokens: 64000,
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
+        thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: "medium" },
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userContent }],
       },
       { signal: attempt.signal, maxRetries: 0 },
     );
-    let received = 0;
-    onProgress?.(0);
+    let written = "";
+    let thought = "";
+    onProgress?.(0, "");
+    onThinking?.("");
+    stream.on("thinking", (delta) => {
+      thought += delta;
+      onThinking?.(thought);
+    });
     stream.on("text", (delta) => {
-      received += delta.length;
-      onProgress?.(received);
+      written += delta;
+      onProgress?.(written.length, written);
     });
     return await stream.finalMessage();
   } catch (err) {
