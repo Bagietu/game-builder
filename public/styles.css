@@ -313,3 +313,6 @@ dialog.shake { animation: shake-dialog 0.35s; }
 
 .resume { background: var(--card-2); border: 2px solid var(--accent-2); border-radius: 12px; padding: 12px; }
 .resume p { margin: 0 0 10px; }
+.live-frame { width: 100%; height: 300px; border: 0; border-radius: 10px; background: #000; display: block; pointer-events: none; }
+.tweak .live-frame { height: 160px; }
+.live-stage { color: var(--accent-2); font-weight: 700; font-size: 0.85rem; }

@@ -1,4 +1,5 @@
-import { professorTurn, generateGame } from "./generate.js";
+import { professorTurn, planGame, generateGame, editGame, GenerationError } from "./generate.js";
+import { playtest, withPhaser } from "./playtest.js";
 import { ensureUnlocked } from "./lock.js";
 import { saveAsFile, publishGame, checkPublished, gameLinks } from "./install.js";
 import { Professor, GREETINGS, THINKING_LINES, BUILD_LINES, pick } from "./professor.js";
@@ -214,31 +215,39 @@ async function build(idea, answers) {
   const summary = [idea, ...answers.map((a) => a.answer)].filter(Boolean).join(" · ") || "Surprise game";
 
   setBusy(true, $("buildBtn"), $("progress"), $("error"));
-  $("progressText").textContent = "Building your game…";
   const quips = setInterval(() => prof.set(pick(BUILD_LINES), "working"), 3500);
   setTimeout(() => prof.set(pick(BUILD_LINES), "working"), 1500);
   abort = new AbortController();
+  const signal = abort.signal;
   const ticker = progressTicker($("progressText"), $("buildLive"));
+  const callbacks = liveCallbacks(ticker, () =>
+    prof.set("The connection fizzled! Rewiring the doohickey and starting over…", "working"),
+  );
   // Remembered until the build ends, so a page reload mid-build can offer to redo it.
   setPendingBuild({ kind: "build", idea, answers, at: Date.now() });
   try {
-    const { html, title } = await generateGame({
-      apiKey,
-      prompt,
-      signal: abort.signal,
-      onProgress: (n, text) => ticker.update(n, text),
-      onThinking: (text) => ticker.thinking(text),
-      onRetry: (n) => {
-        ticker.retry(n);
-        prof.set("The connection fizzled! Rewiring the doohickey and starting over…", "working");
-      },
-    });
-    const game = { id: crypto.randomUUID(), title: title || summary, prompt, html, history: [summary] };
+    ticker.stage("Step 1/3 · Planning", 0, 8, 1500, "📝 Game plan");
+    const plan = await planGame({ apiKey, prompt, signal, ...callbacks });
+
+    ticker.stage("Step 2/3 · Building", 8, 82, 40_000, "⌨️ Your game, being written");
+    const built = await generateGame({ apiKey, prompt, plan, signal, ...callbacks });
+    let game = { id: crypto.randomUUID(), title: built.title || summary, prompt, plan, html: built.html, history: [summary] };
+    saveGame(game); // keep the paid-for build even if the page goes away during testing
+    setPendingBuild(null);
+    renderGallery();
+
+    const tested = await playtestAndFix({ apiKey, html: game.html, ticker, signal, rounds: 2, from: 82, step: "Step 3/3" });
+    game = { ...game, html: tested.html };
     saveGame(game);
     $("prompt").value = "";
     renderGallery();
     clearInterval(quips);
-    prof.say(`IT'S ALIVE! Behold: ${game.title}! Want another one?`, { mood: "laughing" });
+    prof.say(
+      tested.clean
+        ? `IT'S ALIVE! My robot played it and found no bugs. Behold: ${game.title}!`
+        : `IT'S ALIVE! Mostly. A gremlin or two survived my robot. Tap ✏️ and tell me what's wrong!`,
+      { mood: "laughing" },
+    );
     openPlayer(game);
   } catch (err) {
     clearInterval(quips);
@@ -254,39 +263,92 @@ async function build(idea, answers) {
   }
 }
 
+const liveCallbacks = (ticker, onRetry) => ({
+  onProgress: (n, text) => ticker.update(n, text),
+  onThinking: (text) => ticker.thinking(text),
+  onRetry: (n) => {
+    ticker.retry(n);
+    onRetry?.();
+  },
+});
+
+/**
+ * Let a robot play the game; send any errors back to Claude to fix, up to `rounds` times.
+ * Resolves with { html, clean }.
+ */
+async function playtestAndFix({ apiKey, html, ticker, signal, rounds, from, step }) {
+  const span = (100 - from) / (rounds * 2 + 1);
+  let at = from;
+  for (let round = 0; ; round++) {
+    ticker.stage(`${step} · ${round ? "Re-testing" : "Playtesting"}`, at, (at += span), 0, null, true);
+    let errors;
+    try {
+      errors = await playtest(html, ticker.frame(), { signal });
+    } catch {
+      return { html, clean: false }; // couldn't run the test (e.g. offline); keep the game as is
+    }
+    if (signal.aborted) throw new GenerationError("Cancelled.");
+    if (!errors.length) return { html, clean: true };
+    if (round >= rounds) return { html, clean: false };
+
+    const bugs = `${errors.length} bug${errors.length > 1 ? "s" : ""}`;
+    ticker.stage(`${step} · Fixing ${bugs} (${round + 1}/${rounds})`, at, (at += span), 3000, "🔧 Fixes being written");
+    const change = `An automatic playtest (a robot tapping the screen and pressing keys for a few seconds) hit these errors:\n- ${errors.join("\n- ")}\n\nFind and fix the root causes. Keep the game the same otherwise.`;
+    html = (await editGame({ apiKey, html, change, signal, ...liveCallbacks(ticker) })).html;
+  }
+}
+
 function resetBuilder() {
   $("quiz").hidden = true;
   $("form").hidden = false;
 }
 
-// Typical game size, used only to pace the progress bar while code streams in.
-const EXPECTED_CHARS = 20_000;
-
-/** Progress text with a running clock, a progress bar, live thinking and live code. */
+/** Progress line with a running clock, a progress bar, live thinking, live code and the playtest view. */
 function progressTicker(el, live) {
   const started = Date.now();
   const bar = live.querySelector(".live-bar i");
   const thinkingEl = live.querySelector(".live-thinking");
   const codeEl = live.querySelector(".live-code");
+  const codeLabel = live.querySelector(".live-code-label");
+  const test = live.querySelector(".live-test");
+  const frame = live.querySelector(".live-frame");
+  let stage = { name: "", lo: 0, hi: 100, expected: 20_000, testing: false, start: started };
   let chars = 0;
-  let thinkingStart = started;
   let note = "";
-  thinkingEl.textContent = "Warming up the brain…";
-  codeEl.textContent = "";
   live.hidden = false;
 
   const render = () => {
     const secs = Math.floor((Date.now() - started) / 1000);
-    el.textContent = `${note}${progressLabel(chars)} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
-    // Thinking creeps toward 15%; writing fills the rest, slowing as it nears the end.
-    const thinkingPct = 15 * (1 - Math.exp(-(Date.now() - thinkingStart) / 60_000));
-    const pct = chars ? 15 + 83 * (1 - Math.exp(-chars / EXPECTED_CHARS)) : thinkingPct;
-    bar.style.width = `${pct.toFixed(1)}%`;
+    const doing = stage.testing ? "Tapping around…" : progressLabel(chars);
+    el.textContent = `${note}${stage.name ? stage.name + " · " : ""}${doing} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+    // Within a stage: thinking creeps up to 15%, writing fills the rest, slowing near the end.
+    const elapsed = Date.now() - stage.start;
+    const inner = stage.testing
+      ? Math.min(1, elapsed / 9000)
+      : chars
+        ? 0.15 + 0.83 * (1 - Math.exp(-chars / stage.expected))
+        : 0.15 * (1 - Math.exp(-elapsed / 60_000));
+    bar.style.width = `${(stage.lo + (stage.hi - stage.lo) * inner).toFixed(1)}%`;
   };
   const scrollDown = (pre) => (pre.scrollTop = pre.scrollHeight);
   const timer = setInterval(render, 1000);
-  render();
   return {
+    /** Start a step: progress runs from lo% to hi%. */
+    stage(name, lo, hi, expected, label, testing = false) {
+      stage = { name, lo, hi, expected: expected || 1, testing, start: Date.now() };
+      chars = 0;
+      note = "";
+      test.hidden = !testing;
+      codeEl.hidden = codeLabel.hidden = testing;
+      thinkingEl.hidden = thinkingEl.previousElementSibling.hidden = testing;
+      if (label) codeLabel.textContent = label;
+      if (!testing) {
+        codeEl.textContent = "";
+        thinkingEl.textContent = "Warming up the brain…";
+      }
+      render();
+    },
+    frame: () => frame,
     update(n, text) {
       chars = n;
       codeEl.textContent = text.slice(-1500);
@@ -300,18 +362,20 @@ function progressTicker(el, live) {
     },
     retry(n) {
       note = `Connection lost, restarted (try ${n + 1}). `;
-      thinkingStart = Date.now();
+      chars = 0;
+      stage.start = Date.now();
       render();
     },
     stop() {
       clearInterval(timer);
+      frame.srcdoc = "";
       live.hidden = true;
     },
   };
 }
 
 function progressLabel(chars) {
-  return chars === 0 ? "Thinking up your game…" : `Writing code… ${chars < 1000 ? chars : `${Math.round(chars / 1000)}k`} characters`;
+  return chars === 0 ? "Thinking…" : `Writing code… ${chars < 1000 ? chars : `${Math.round(chars / 1000)}k`} characters`;
 }
 
 // Keep the screen on while building: phones cut the connection when it sleeps.
@@ -392,10 +456,22 @@ function renderGallery() {
 
 // ---------- Player ----------
 
+/** Load the game into the player, with the game engine inlined. */
+async function showInFrame(game) {
+  $("frame").srcdoc = "";
+  let html;
+  try {
+    html = await withPhaser(game.html);
+  } catch (err) {
+    html = `<body style="font:16px system-ui;color:#fff;background:#14121f;padding:24px">${err.message}</body>`;
+  }
+  if (currentGame?.id === game.id) $("frame").srcdoc = html;
+}
+
 function openPlayer(game) {
   currentGame = game;
   $("playerTitle").textContent = game.title;
-  $("frame").srcdoc = game.html;
+  showInFrame(game);
   $("tweakPanel").hidden = true;
   $("tweakError").hidden = true;
   $("player").hidden = false;
@@ -420,19 +496,18 @@ async function tweak() {
   const game = currentGame;
   setBusy(true, $("tweakBtn"), $("tweakProgress"), $("tweakError"));
   abort = new AbortController();
+  const signal = abort.signal;
   const ticker = progressTicker($("tweakProgressText"), $("tweakLive"));
   setPendingBuild({ kind: "tweak", gameId: game.id, prompt, at: Date.now() });
   try {
-    const { html, title } = await generateGame({
-      apiKey,
-      prompt,
-      currentHtml: game.html,
-      signal: abort.signal,
-      onProgress: (n, text) => ticker.update(n, text),
-      onThinking: (text) => ticker.thinking(text),
-      onRetry: (n) => ticker.retry(n),
-    });
-    const updated = { ...game, html, title: title || game.title, history: [...game.history, prompt] };
+    ticker.stage("Changing", 0, 70, 4000, "🔧 Changes being written");
+    const changed = await editGame({ apiKey, html: game.html, change: prompt, signal, ...liveCallbacks(ticker) });
+    let updated = { ...game, html: changed.html, title: changed.title || game.title, history: [...game.history, prompt] };
+    saveGame(updated);
+    setPendingBuild(null);
+
+    const tested = await playtestAndFix({ apiKey, html: updated.html, ticker, signal, rounds: 1, from: 70, step: "Checking" });
+    updated = { ...updated, html: tested.html };
     saveGame(updated);
     renderGallery();
     $("tweakPrompt").value = "";
@@ -450,7 +525,7 @@ async function tweak() {
 function openPlayerInPlace(game) {
   currentGame = game;
   $("playerTitle").textContent = game.title;
-  $("frame").srcdoc = game.html;
+  showInFrame(game);
   $("tweakPanel").hidden = true;
 }
 
@@ -662,7 +737,7 @@ $("closePlayer").addEventListener("click", () => {
   closePlayer();
   if (history.state?.player) history.back();
 });
-$("restartBtn").addEventListener("click", () => currentGame && ($("frame").srcdoc = currentGame.html));
+$("restartBtn").addEventListener("click", () => currentGame && showInFrame(currentGame));
 $("tweakToggle").addEventListener("click", () => {
   $("tweakPanel").hidden = !$("tweakPanel").hidden;
   if (!$("tweakPanel").hidden) $("tweakPrompt").focus();

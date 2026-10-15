@@ -8,6 +8,8 @@ const builtAt = new Date().toISOString();
 
 rmSync("dist", { recursive: true, force: true });
 cpSync("public", "dist", { recursive: true });
+mkdirSync("dist/vendor", { recursive: true });
+cpSync("node_modules/phaser/dist/phaser.min.js", "dist/vendor/phaser.min.js");
 writeFileSync("dist/version.json", JSON.stringify({ version, builtAt }));
 buildPublishedGames();
 
