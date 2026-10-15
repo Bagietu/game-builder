@@ -12,7 +12,7 @@
   <link rel="apple-touch-icon" href="icon-192.png" />
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body class="locked">
   <header class="topbar">
     <div>
       <h1>🎮 Game Builder</h1>
@@ -145,11 +145,10 @@
   <dialog id="lock">
     <form id="lockForm" class="settings-form">
       <h2>🔒 Lab access</h2>
-      <p class="muted small">The professor only builds games for people who know the password.</p>
+      <p class="muted small">The professor only lets in people who know the password.</p>
       <input id="lockInput" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" />
       <p id="lockError" class="error" hidden>Wrong password. The professor is unimpressed.</p>
       <div class="row">
-        <button id="lockCancel" type="button" class="secondary">Cancel</button>
         <button value="unlock" class="primary">Unlock</button>
       </div>
     </form>
@@ -159,26 +158,31 @@
   <dialog id="settings">
     <form method="dialog" class="settings-form">
       <h2>Settings</h2>
-      <label for="apiKey" class="label">Anthropic API key</label>
-      <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…" />
-      <label for="workspaceId" class="label">Workspace ID <span class="muted">(only if asked)</span></label>
-      <input id="workspaceId" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="wrkspc_…" />
-      <p class="muted small">
-        Some keys work across several workspaces and need this. Find it in the Console under Settings → Workspaces.
-      </p>
-      <p class="muted small">
-        Stored only on this device and sent only to Anthropic's API.
-        Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
-      </p>
-      <label for="githubTokenSettings" class="label">GitHub token <span class="muted">(for making games into apps)</span></label>
-      <input id="githubTokenSettings" type="password" autocomplete="off" placeholder="github_pat_…" />
+      <details id="adminBox" class="admin">
+        <summary>🔑 Admin: shared keys</summary>
+        <p class="muted small">
+          Saved encrypted in the app's GitHub repo. Every device that knows the app password gets them automatically.
+        </p>
+        <label for="apiKey" class="label">Anthropic API key</label>
+        <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…" />
+        <label for="workspaceId" class="label">Workspace ID <span class="muted">(only if asked)</span></label>
+        <input id="workspaceId" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="wrkspc_…" />
+        <label for="githubTokenSettings" class="label">GitHub token <span class="muted">(Contents: read and write)</span></label>
+        <input id="githubTokenSettings" type="password" autocomplete="off" placeholder="github_pat_…" />
+        <p class="muted small">Needed to save these keys, and for making games into apps.</p>
+        <label for="adminPassword" class="label">App password</label>
+        <input id="adminPassword" type="password" autocomplete="current-password" />
+        <label for="adminNewPassword" class="label">New app password <span class="muted">(optional)</span></label>
+        <input id="adminNewPassword" type="password" autocomplete="new-password" placeholder="Leave empty to keep the current one" />
+        <button id="adminSave" type="button" class="primary">Save for all devices</button>
+        <p id="adminStatus" class="small" hidden></p>
+      </details>
       <p id="settingsVersion" class="muted small"></p>
       <p id="apkLink" class="small" hidden>
         <a href="https://github.com/Bagietu/game-builder/releases/latest/download/game-builder.apk">📲 Download the Android app (APK)</a>
       </p>
       <div class="row">
-        <button id="cancelSettings" type="button" class="secondary">Cancel</button>
-        <button id="saveSettings" value="save" class="primary">Save</button>
+        <button id="cancelSettings" type="button" class="secondary">Close</button>
       </div>
     </form>
   </dialog>
