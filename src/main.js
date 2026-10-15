@@ -217,13 +217,17 @@ async function build(idea, answers) {
   const quips = setInterval(() => prof.set(pick(BUILD_LINES), "working"), 3500);
   setTimeout(() => prof.set(pick(BUILD_LINES), "working"), 1500);
   abort = new AbortController();
+  const ticker = progressTicker($("progressText"));
   try {
     const { html, title } = await generateGame({
       apiKey,
       prompt,
       signal: abort.signal,
-      onProgress: (n) => ($("progressText").textContent = progressLabel(n)),
-      onRetry: () => prof.set("The connection fizzled! Rewiring the doohickey and starting over…", "working"),
+      onProgress: (n) => ticker.update(n),
+      onRetry: (n) => {
+        ticker.retry(n);
+        prof.set("The connection fizzled! Rewiring the doohickey and starting over…", "working");
+      },
     });
     const game = { id: crypto.randomUUID(), title: title || summary, prompt, html, history: [summary] };
     saveGame(game);
@@ -238,6 +242,7 @@ async function build(idea, answers) {
     showError($("error"), err);
   } finally {
     clearInterval(quips);
+    ticker.stop();
     abort = null;
     setBusy(false, $("buildBtn"), $("progress"));
     resetBuilder();
@@ -247,6 +252,30 @@ async function build(idea, answers) {
 function resetBuilder() {
   $("quiz").hidden = true;
   $("form").hidden = false;
+}
+
+/** Progress text with a running clock, so a stuck build is obvious. */
+function progressTicker(el) {
+  const started = Date.now();
+  let chars = 0;
+  let note = "";
+  const render = () => {
+    const secs = Math.floor((Date.now() - started) / 1000);
+    el.textContent = `${note}${progressLabel(chars)} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+  };
+  const timer = setInterval(render, 1000);
+  render();
+  return {
+    update(n) {
+      chars = n;
+      render();
+    },
+    retry(n) {
+      note = `Connection lost, restarted (try ${n + 1}). `;
+      render();
+    },
+    stop: () => clearInterval(timer),
+  };
 }
 
 function progressLabel(chars) {
@@ -359,14 +388,15 @@ async function tweak() {
   const game = currentGame;
   setBusy(true, $("tweakBtn"), $("tweakProgress"), $("tweakError"));
   abort = new AbortController();
+  const ticker = progressTicker($("tweakProgressText"));
   try {
     const { html, title } = await generateGame({
       apiKey,
       prompt,
       currentHtml: game.html,
       signal: abort.signal,
-      onProgress: (n) => ($("tweakProgressText").textContent = progressLabel(n)),
-      onRetry: () => ($("tweakProgressText").textContent = "Connection dropped, starting over…"),
+      onProgress: (n) => ticker.update(n),
+      onRetry: (n) => ticker.retry(n),
     });
     const updated = { ...game, html, title: title || game.title, history: [...game.history, prompt] };
     saveGame(updated);
@@ -376,6 +406,7 @@ async function tweak() {
   } catch (err) {
     showError($("tweakError"), err);
   } finally {
+    ticker.stop();
     abort = null;
     setBusy(false, $("tweakBtn"), $("tweakProgress"));
   }
