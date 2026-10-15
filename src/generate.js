@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { getWorkspaceId } from "./storage.js";
+import { getWorkspaceId, getGeminiKey } from "./storage.js";
+import { geminiText } from "./gemini.js";
 
 const MODEL = "claude-opus-5-5";
 
@@ -78,6 +79,19 @@ const PROFESSOR_SCHEMA = {
 
 export class GenerationError extends Error {}
 
+/** Design work (interview, plan, art list) goes to Gemini when its key is set; Claude covers if Gemini fails. */
+async function viaGemini(signal, ask, fallback) {
+  const key = getGeminiKey();
+  if (!key) return fallback();
+  try {
+    return await ask(key);
+  } catch (err) {
+    if (signal?.aborted) throw new GenerationError("Cancelled.");
+    console.warn("Gemini failed, using Claude instead:", err);
+    return fallback();
+  }
+}
+
 // Keys that aren't tied to one workspace must name the workspace on every request.
 function makeClient(apiKey, onBytes) {
   const workspaceId = getWorkspaceId();
@@ -106,13 +120,22 @@ function tapBody(res, onBytes) {
  * Returns { reaction, question, options, ready }.
  */
 export async function professorTurn({ apiKey, idea, answers, signal }) {
-  const client = makeClient(apiKey);
   const transcript = answers.length
     ? answers
         .map((a, i) => (a.final ? `Final details from player: ${a.answer}` : `Q${i + 1}: ${a.question}\nPlayer: ${a.answer}`))
         .join("\n\n")
     : "(No questions asked yet. This is your first turn.)";
+  const user = `Player's game idea: ${idea || "None yet. They want you to surprise them."}\n\nInterview so far:\n${transcript}`;
+  const tidy = (turn) => ({ ...turn, options: (turn.options ?? []).slice(0, 4) });
+  return viaGemini(
+    signal,
+    async (key) => tidy(await geminiText({ key, system: PROFESSOR_PROMPT, user, schema: PROFESSOR_SCHEMA, signal })),
+    () => professorWithClaude(apiKey, user, signal).then(tidy),
+  );
+}
 
+async function professorWithClaude(apiKey, user, signal) {
+  const client = makeClient(apiKey);
   let message;
   try {
     message = await client.beta.messages.create(
@@ -126,7 +149,7 @@ export async function professorTurn({ apiKey, idea, answers, signal }) {
         messages: [
           {
             role: "user",
-            content: `Player's game idea: ${idea || "None yet. They want you to surprise them."}\n\nInterview so far:\n${transcript}`,
+            content: user,
           },
         ],
       },
@@ -141,8 +164,7 @@ export async function professorTurn({ apiKey, idea, answers, signal }) {
   }
   const text = message.content.find((block) => block.type === "text")?.text;
   try {
-    const turn = JSON.parse(text);
-    return { ...turn, options: (turn.options ?? []).slice(0, 4) };
+    return JSON.parse(text);
   } catch {
     throw new GenerationError("The professor's notes came back garbled. Try again.");
   }
@@ -175,12 +197,19 @@ async function streamWithRetries(apiKey, request, { signal, onProgress, onThinki
 
 /** Step 1: a short design plan for the game. */
 export async function planGame({ apiKey, prompt, ...callbacks }) {
-  const { text } = await streamWithRetries(
-    apiKey,
-    { system: PLAN_PROMPT, effort: "low", maxTokens: 8000, content: `Player's brief:\n${prompt}` },
-    callbacks,
+  const content = `Player's brief:\n${prompt}`;
+  return viaGemini(
+    callbacks.signal,
+    async (key) => {
+      const plan = await geminiText({ key, system: PLAN_PROMPT, user: content, signal: callbacks.signal });
+      callbacks.onProgress?.(plan.length, plan);
+      return plan;
+    },
+    async () => {
+      const { text } = await streamWithRetries(apiKey, { system: PLAN_PROMPT, effort: "low", maxTokens: 8000, content }, callbacks);
+      return text.trim();
+    },
   );
-  return text.trim();
 }
 
 const ART_SCHEMA = {
@@ -206,7 +235,24 @@ const ART_SCHEMA = {
 };
 
 /** From the plan, the images worth having drawn: { style, assets: [{ key, kind, description }] }. */
+const ART_PROMPT = `An image model will draw art for a 2D phone game from this design plan. Choose up to 6 images that matter most: the player character, main enemies or obstacles, key pickups, and at most one background. Use short lowercase keys like "hero" or "slime". Each description says exactly what to draw (look, colors, pose) for a single image. "style" is one shared art style line, e.g. "bright cartoon, thick dark outlines, soft shading". Repeated or tiny things (bullets, particles, tiles, UI) are drawn in code, so leave them out.`;
+
 export async function listArt({ apiKey, plan, signal }) {
+  const parsed = await viaGemini(
+    signal,
+    (key) => geminiText({ key, system: ART_PROMPT, user: plan, schema: ART_SCHEMA, signal }),
+    () => artWithClaude(apiKey, plan, signal),
+  );
+  const seen = new Set();
+  const assets = (parsed.assets || [])
+    .filter((a) => a?.key && a.description)
+    .map((a) => ({ ...a, kind: a.kind === "background" ? "background" : "sprite", key: a.key.toLowerCase().replace(/[^a-z0-9_]/g, "_") }))
+    .filter((a) => !seen.has(a.key) && seen.add(a.key))
+    .slice(0, 6);
+  return { style: parsed.style || "colorful cartoon", assets };
+}
+
+async function artWithClaude(apiKey, plan, signal) {
   const client = makeClient(apiKey);
   try {
     const message = await client.beta.messages.create(
@@ -214,18 +260,12 @@ export async function listArt({ apiKey, plan, signal }) {
         model: MODEL,
         max_tokens: 4000,
         output_config: { effort: "low", format: { type: "json_schema", schema: ART_SCHEMA } },
-        system: `An image model will draw art for a 2D phone game from this design plan. Choose up to 6 images that matter most: the player character, main enemies or obstacles, key pickups, and at most one background. Use short lowercase keys like "hero" or "slime". Each description says exactly what to draw (look, colors, pose) for a single image. "style" is one shared art style line, e.g. "bright cartoon, thick dark outlines, soft shading". Repeated or tiny things (bullets, particles, tiles, UI) are drawn in code, so leave them out.`,
+        system: ART_PROMPT,
         messages: [{ role: "user", content: plan }],
       },
       { signal },
     );
-    const parsed = JSON.parse(message.content.find((b) => b.type === "text")?.text || "{}");
-    const seen = new Set();
-    const assets = (parsed.assets || [])
-      .map((a) => ({ ...a, key: a.key.toLowerCase().replace(/[^a-z0-9_]/g, "_") }))
-      .filter((a) => a.key && !seen.has(a.key) && seen.add(a.key))
-      .slice(0, 6);
-    return { style: parsed.style || "colorful cartoon", assets };
+    return JSON.parse(message.content.find((b) => b.type === "text")?.text || "{}");
   } catch (err) {
     throw new GenerationError(describeApiError(err));
   }

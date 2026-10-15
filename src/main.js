@@ -109,14 +109,7 @@ async function sayReaction(reaction) {
 
 function showQuestion(session, turn) {
   // Keep the roast visible above the question.
-  prof.say(turn.question).then(() => {
-    if (turn.reaction) {
-      const r = document.createElement("span");
-      r.className = "reaction";
-      r.textContent = turn.reaction;
-      $("bubbleText").prepend(r);
-    }
-  });
+  prof.say(turn.question, { lead: turn.reaction });
 
   const number = session.answers.filter((a) => !a.final).length + 1;
   const open = turn.options.length === 0;
@@ -163,14 +156,7 @@ function showQuestion(session, turn) {
 
 // The professor is ready: let the player add anything else before building.
 function showFinalDetails(session, turn) {
-  prof.say(`${turn.question} ${FINAL_QUESTION}`).then(() => {
-    if (turn.reaction) {
-      const r = document.createElement("span");
-      r.className = "reaction";
-      r.textContent = turn.reaction;
-      $("bubbleText").prepend(r);
-    }
-  });
+  prof.say(`${turn.question} ${FINAL_QUESTION}`, { lead: turn.reaction });
   $("quizCount").textContent = "Final touches (optional)";
   $("quizOptions").hidden = true;
   $("answerForm").hidden = true;
