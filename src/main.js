@@ -312,6 +312,7 @@ const liveCallbacks = (ticker, onRetry) => ({
     ticker.retry(n);
     onRetry?.();
   },
+  onContinue: (n) => prof.set(`This game is ENORMOUS! Writing part ${n}…`, "working"),
 });
 
 /**

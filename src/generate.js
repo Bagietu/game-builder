@@ -173,6 +173,8 @@ async function professorWithClaude(apiKey, user, signal) {
 /** Run one streamed request, starting over if the phone drops the connection. */
 // Below this much text, starting over is cheaper than asking Claude to pick up mid-file.
 const MIN_RESUME = 1500;
+// How many back-to-back replies one game may take when it outgrows a single reply.
+const MAX_PARTS = 4;
 
 /** Ask Claude to carry on a document that got cut off, instead of writing it again. */
 function continuation(content, soFar) {
@@ -195,8 +197,9 @@ export function stitch(soFar, rest) {
  * `request.resume`, text saved by an earlier attempt) instead of starting over.
  * `onPartial` gets everything written so far, for saving.
  */
-async function streamWithRetries(apiKey, request, { signal, onProgress, onThinking, onRetry, onPartial }) {
+async function streamWithRetries(apiKey, request, { signal, onProgress, onThinking, onRetry, onPartial, onContinue }) {
   let kept = request.resumable ? request.resume || "" : "";
+  let parts = 1;
   for (let attempt = 0; ; attempt++) {
     const prefix = kept.length >= MIN_RESUME ? kept : "";
     const req = prefix ? { ...request, content: continuation(request.content, prefix) } : request;
@@ -212,7 +215,16 @@ async function streamWithRetries(apiKey, request, { signal, onProgress, onThinki
         throw new GenerationError("Claude declined to make this one. Try describing the game differently.");
       }
       const text = message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-      return { message, text: prefix ? stitch(prefix, text) : text };
+      const whole = prefix ? stitch(prefix, text) : text;
+      // Hit the length limit mid-file: ask for the rest instead of failing (big games need several parts).
+      if (request.resumable && message.stop_reason === "max_tokens" && text.length > 500 && parts < MAX_PARTS) {
+        kept = whole;
+        onPartial?.(kept);
+        onContinue?.(++parts);
+        attempt--; // not a connection retry
+        continue;
+      }
+      return { message, text: whole };
     } catch (err) {
       if (request.resumable && latest) {
         kept = prefix ? stitch(prefix, latest) : latest;
@@ -326,7 +338,7 @@ export async function generateGame({ apiKey, prompt, plan, assets, resume, ...ca
   const html = extractHtml(text);
   if (!html) {
     if (message.stop_reason === "max_tokens") {
-      throw new GenerationError("The game got too big and was cut off. Try a simpler idea.");
+      throw new GenerationError("The game got too big even in several parts. Tap Continue to keep going, or try a smaller idea.");
     }
     throw new GenerationError("Claude didn't return a playable game. Try again.");
   }
